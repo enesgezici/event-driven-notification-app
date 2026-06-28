@@ -84,6 +84,8 @@ go build -o notification-server ./cmd/notification-server
 - Filtreleme ve sayfalama
 - Kanala göre öncelik sıralaması
 - PostgreSQL primary key ile korunan idempotentlik desteği
+- Planlı bildirim gönderimi (`scheduled_at`)
+- Şablon sistemi ve değişken yerleştirme
 - Gerçek zamanlı metrikler
 - Sağlık kontrolü
 - Dış webhook entegrasyonu
@@ -109,4 +111,4 @@ go build -o notification-server ./cmd/notification-server
 - Kuyruk kalıcılığı için Redis/RabbitMQ kullanılabilir
 - API kimlik doğrulaması eklenebilir
 - Prometheus/Grafana entegrasyonu ile monitoring genişletilebilir
-- Bildirim şablonları ve planlı gönderim eklenebilir
+- WebSocket durum güncellemeleri ve distributed tracing eklenebilir

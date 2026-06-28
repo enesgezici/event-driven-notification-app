@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -48,13 +49,27 @@ func (s *PostgresStorage) Migrate() error {
 			retry_count INTEGER NOT NULL DEFAULT 0,
 			external_message_id TEXT,
 			idempotency_key TEXT,
+			template_id TEXT,
+			template_data JSONB,
+			scheduled_at TIMESTAMPTZ,
 			created_at TIMESTAMPTZ NOT NULL,
 			updated_at TIMESTAMPTZ NOT NULL
 		);`,
+		`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS template_id TEXT;`,
+		`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS template_data JSONB;`,
+		`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;`,
 		`CREATE TABLE IF NOT EXISTS idempotency_keys (
 			idempotency_key TEXT PRIMARY KEY,
 			batch_id TEXT NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS templates (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			channel TEXT NOT NULL,
+			content TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL
 		);`,
 		`INSERT INTO idempotency_keys (idempotency_key, batch_id, created_at)
 		 SELECT idempotency_key, MIN(batch_id), MIN(created_at)
@@ -66,8 +81,10 @@ func (s *PostgresStorage) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_channel ON notifications(channel);`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_scheduled_at ON notifications(scheduled_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_status_channel_created_at ON notifications(status, channel, created_at DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_idempotency_key ON notifications(idempotency_key);`,
+		`CREATE INDEX IF NOT EXISTS idx_templates_channel ON templates(channel);`,
 	}
 
 	for _, query := range queries {
@@ -79,7 +96,11 @@ func (s *PostgresStorage) Migrate() error {
 }
 
 func (s *PostgresStorage) SaveNotification(n *model.Notification) error {
-	_, err := s.db.Exec(insertNotificationQuery,
+	templateData, err := marshalTemplateData(n.TemplateData)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(insertNotificationQuery,
 		n.ID,
 		n.BatchID,
 		n.Recipient,
@@ -91,6 +112,9 @@ func (s *PostgresStorage) SaveNotification(n *model.Notification) error {
 		n.RetryCount,
 		n.ExternalMessageID,
 		n.IdempotencyKey,
+		n.TemplateID,
+		templateData,
+		nullableTime(n.ScheduledAt),
 		n.CreatedAt.UTC(),
 		n.UpdatedAt.UTC(),
 	)
@@ -138,6 +162,10 @@ func (s *PostgresStorage) SaveNotificationsBatch(idempotencyKey string, notifica
 	defer stmt.Close()
 
 	for _, n := range notifications {
+		templateData, err := marshalTemplateData(n.TemplateData)
+		if err != nil {
+			return false, nil, err
+		}
 		if _, err := stmt.Exec(
 			n.ID,
 			n.BatchID,
@@ -150,6 +178,9 @@ func (s *PostgresStorage) SaveNotificationsBatch(idempotencyKey string, notifica
 			n.RetryCount,
 			n.ExternalMessageID,
 			n.IdempotencyKey,
+			n.TemplateID,
+			templateData,
+			nullableTime(n.ScheduledAt),
 			n.CreatedAt.UTC(),
 			n.UpdatedAt.UTC(),
 		); err != nil {
@@ -163,11 +194,13 @@ func (s *PostgresStorage) SaveNotificationsBatch(idempotencyKey string, notifica
 	return true, notifications, nil
 }
 
-const insertNotificationQuery = `INSERT INTO notifications (id, batch_id, recipient, channel, content, priority, status, error, retry_count, external_message_id, idempotency_key, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, $13)`
+const notificationSelectColumns = `id, batch_id, recipient, channel, content, priority, status, error, retry_count, external_message_id, idempotency_key, template_id, template_data, scheduled_at, created_at, updated_at`
+
+const insertNotificationQuery = `INSERT INTO notifications (id, batch_id, recipient, channel, content, priority, status, error, retry_count, external_message_id, idempotency_key, template_id, template_data, scheduled_at, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''), $13::jsonb, $14, $15, $16)`
 
 func (s *PostgresStorage) GetNotificationByID(id string) (*model.Notification, error) {
-	row := s.db.QueryRow(`SELECT id, batch_id, recipient, channel, content, priority, status, error, retry_count, external_message_id, created_at, updated_at FROM notifications WHERE id = $1`, id)
+	row := s.db.QueryRow(`SELECT `+notificationSelectColumns+` FROM notifications WHERE id = $1`, id)
 	return scanNotification(row)
 }
 
@@ -185,7 +218,7 @@ func (s *PostgresStorage) UpdateNotification(n *model.Notification) error {
 }
 
 func (s *PostgresStorage) ListNotifications(filters map[string]string, page, size int) ([]*model.Notification, error) {
-	query := `SELECT id, batch_id, recipient, channel, content, priority, status, error, retry_count, external_message_id, created_at, updated_at FROM notifications`
+	query := `SELECT ` + notificationSelectColumns + ` FROM notifications`
 	clauses := []string{}
 	args := []any{}
 
@@ -228,22 +261,22 @@ func (s *PostgresStorage) SetNotificationQueued(id string) error {
 }
 
 func (s *PostgresStorage) GetPendingNotifications() ([]*model.Notification, error) {
-	query := `SELECT id, batch_id, recipient, channel, content, priority, status, error, retry_count, external_message_id, created_at, updated_at FROM notifications WHERE status IN ($1, $2) ORDER BY priority ASC, created_at ASC`
+	query := `SELECT ` + notificationSelectColumns + ` FROM notifications WHERE status IN ($1, $2) ORDER BY priority ASC, COALESCE(scheduled_at, created_at) ASC`
 	return s.queryNotifications(query, model.StatusPending, model.StatusQueued)
 }
 
 func (s *PostgresStorage) GetPendingNotificationsByBatch(batchID string) ([]*model.Notification, error) {
-	query := `SELECT id, batch_id, recipient, channel, content, priority, status, error, retry_count, external_message_id, created_at, updated_at FROM notifications WHERE batch_id = $1 ORDER BY priority ASC, created_at ASC`
+	query := `SELECT ` + notificationSelectColumns + ` FROM notifications WHERE batch_id = $1 ORDER BY priority ASC, COALESCE(scheduled_at, created_at) ASC`
 	return s.queryNotifications(query, batchID)
 }
 
 func (s *PostgresStorage) GetNotificationsByIdempotencyKey(key string) ([]*model.Notification, error) {
-	query := `SELECT id, batch_id, recipient, channel, content, priority, status, error, retry_count, external_message_id, created_at, updated_at FROM notifications WHERE idempotency_key = $1`
+	query := `SELECT ` + notificationSelectColumns + ` FROM notifications WHERE idempotency_key = $1`
 	return s.queryNotifications(query, key)
 }
 
 func (s *PostgresStorage) getNotificationsByIdempotencyKeyTx(tx *sql.Tx, key string) ([]*model.Notification, error) {
-	query := `SELECT id, batch_id, recipient, channel, content, priority, status, error, retry_count, external_message_id, created_at, updated_at FROM notifications WHERE idempotency_key = $1 ORDER BY created_at ASC`
+	query := `SELECT ` + notificationSelectColumns + ` FROM notifications WHERE idempotency_key = $1 ORDER BY created_at ASC`
 	rows, err := tx.Query(query, key)
 	if err != nil {
 		return nil, err
@@ -274,6 +307,44 @@ func (s *PostgresStorage) CancelNotification(id string) error {
 	return err
 }
 
+func (s *PostgresStorage) SaveTemplate(t *model.Template) error {
+	_, err := s.db.Exec(
+		`INSERT INTO templates (id, name, channel, content, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, channel = EXCLUDED.channel, content = EXCLUDED.content, updated_at = EXCLUDED.updated_at`,
+		t.ID,
+		t.Name,
+		t.Channel,
+		t.Content,
+		t.CreatedAt.UTC(),
+		t.UpdatedAt.UTC(),
+	)
+	return err
+}
+
+func (s *PostgresStorage) GetTemplateByID(id string) (*model.Template, error) {
+	row := s.db.QueryRow(`SELECT id, name, channel, content, created_at, updated_at FROM templates WHERE id = $1`, id)
+	return scanTemplate(row)
+}
+
+func (s *PostgresStorage) ListTemplates() ([]*model.Template, error) {
+	rows, err := s.db.Query(`SELECT id, name, channel, content, created_at, updated_at FROM templates ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []*model.Template{}
+	for rows.Next() {
+		t, err := scanTemplate(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, t)
+	}
+	return result, rows.Err()
+}
+
 func (s *PostgresStorage) queryNotifications(query string, args ...any) ([]*model.Notification, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -294,12 +365,63 @@ func (s *PostgresStorage) queryNotifications(query string, args ...any) ([]*mode
 
 func scanNotification(row interface{ Scan(dest ...any) error }) (*model.Notification, error) {
 	n := &model.Notification{}
-	if err := row.Scan(&n.ID, &n.BatchID, &n.Recipient, &n.Channel, &n.Content, &n.Priority, &n.Status, &n.Error, &n.RetryCount, &n.ExternalMessageID, &n.CreatedAt, &n.UpdatedAt); err != nil {
+	var errorMessage, externalMessageID, idempotencyKey, templateID, templateData sql.NullString
+	var scheduledAt sql.NullTime
+	if err := row.Scan(&n.ID, &n.BatchID, &n.Recipient, &n.Channel, &n.Content, &n.Priority, &n.Status, &errorMessage, &n.RetryCount, &externalMessageID, &idempotencyKey, &templateID, &templateData, &scheduledAt, &n.CreatedAt, &n.UpdatedAt); err != nil {
 		return nil, err
+	}
+	if errorMessage.Valid {
+		n.Error = errorMessage.String
+	}
+	if externalMessageID.Valid {
+		n.ExternalMessageID = externalMessageID.String
+	}
+	if idempotencyKey.Valid {
+		n.IdempotencyKey = idempotencyKey.String
+	}
+	if templateID.Valid {
+		n.TemplateID = templateID.String
+	}
+	if templateData.Valid && templateData.String != "" {
+		if err := json.Unmarshal([]byte(templateData.String), &n.TemplateData); err != nil {
+			return nil, err
+		}
+	}
+	if scheduledAt.Valid {
+		value := scheduledAt.Time.UTC()
+		n.ScheduledAt = &value
 	}
 	n.CreatedAt = n.CreatedAt.UTC()
 	n.UpdatedAt = n.UpdatedAt.UTC()
 	return n, nil
+}
+
+func scanTemplate(row interface{ Scan(dest ...any) error }) (*model.Template, error) {
+	t := &model.Template{}
+	if err := row.Scan(&t.ID, &t.Name, &t.Channel, &t.Content, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		return nil, err
+	}
+	t.CreatedAt = t.CreatedAt.UTC()
+	t.UpdatedAt = t.UpdatedAt.UTC()
+	return t, nil
+}
+
+func marshalTemplateData(data map[string]string) (any, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return string(payload), nil
+}
+
+func nullableTime(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC()
 }
 
 func joinClauses(clauses []string, sep string) string {

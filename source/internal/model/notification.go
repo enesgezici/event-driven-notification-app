@@ -32,8 +32,20 @@ type Notification struct {
 	RetryCount        int                  `json:"retry_count"`
 	ExternalMessageID string               `json:"external_message_id,omitempty"`
 	IdempotencyKey    string               `json:"idempotency_key,omitempty"`
+	TemplateID        string               `json:"template_id,omitempty"`
+	TemplateData      map[string]string    `json:"template_data,omitempty"`
+	ScheduledAt       *time.Time           `json:"scheduled_at,omitempty"`
 	CreatedAt         time.Time            `json:"created_at"`
 	UpdatedAt         time.Time            `json:"updated_at"`
+}
+
+type Template struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Channel   string    `json:"channel"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func ParsePriority(value string) NotificationPriority {

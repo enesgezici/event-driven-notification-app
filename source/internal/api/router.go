@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -24,14 +26,23 @@ type apiHandler struct {
 }
 
 type notificationRequest struct {
-	Recipient string `json:"recipient"`
-	Channel   string `json:"channel"`
-	Content   string `json:"content"`
-	Priority  string `json:"priority,omitempty"`
+	Recipient    string            `json:"recipient"`
+	Channel      string            `json:"channel"`
+	Content      string            `json:"content"`
+	Priority     string            `json:"priority,omitempty"`
+	TemplateID   string            `json:"template_id,omitempty"`
+	TemplateData map[string]string `json:"template_data,omitempty"`
+	ScheduledAt  string            `json:"scheduled_at,omitempty"`
 }
 
 type batchCreateRequest struct {
 	Notifications []notificationRequest `json:"notifications"`
+}
+
+type templateRequest struct {
+	Name    string `json:"name"`
+	Channel string `json:"channel"`
+	Content string `json:"content"`
 }
 
 func NewRouter(db storage.Storage, queueManager *queue.Manager, metricsCollector *metrics.Collector, logger *slog.Logger) http.Handler {
@@ -43,6 +54,9 @@ func NewRouter(db storage.Storage, queueManager *queue.Manager, metricsCollector
 	r.Get("/notifications", h.listNotifications)
 	r.Delete("/notifications/{id}", h.cancelNotification)
 	r.Get("/batches/{batch_id}/notifications", h.getBatchNotifications)
+	r.Post("/templates", h.createTemplate)
+	r.Get("/templates", h.listTemplates)
+	r.Get("/templates/{id}", h.getTemplate)
 	r.Get("/health", h.health)
 	r.Get("/metrics", h.getMetrics)
 
@@ -67,16 +81,31 @@ func (h *apiHandler) createNotifications(w http.ResponseWriter, r *http.Request)
 	notifications := make([]*model.Notification, 0, len(payload.Notifications))
 	for _, item := range payload.Notifications {
 		channel := strings.ToLower(item.Channel)
-		if item.Recipient == "" || item.Channel == "" || item.Content == "" {
-			h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "recipient, channel and content are required"})
+		if item.Recipient == "" || item.Channel == "" || (item.Content == "" && item.TemplateID == "") {
+			h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "recipient, channel and either content or template_id are required"})
 			return
 		}
 		if !model.ValidateChannel(channel) {
 			h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid channel"})
 			return
 		}
-		if !model.ValidateContent(channel, item.Content) {
+
+		content := item.Content
+		if item.TemplateID != "" {
+			rendered, err := h.renderTemplate(item.TemplateID, channel, item.TemplateData)
+			if err != nil {
+				h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			content = rendered
+		}
+		if !model.ValidateContent(channel, content) {
 			h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "content validation failed"})
+			return
+		}
+		scheduledAt, err := parseOptionalFutureTime(item.ScheduledAt)
+		if err != nil {
+			h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "scheduled_at must be a future RFC3339 timestamp"})
 			return
 		}
 
@@ -85,10 +114,13 @@ func (h *apiHandler) createNotifications(w http.ResponseWriter, r *http.Request)
 			BatchID:    batchID,
 			Recipient:  item.Recipient,
 			Channel:    channel,
-			Content:    item.Content,
+			Content:    content,
 			Priority:   model.ParsePriority(strings.ToLower(item.Priority)),
 			Status:     model.StatusPending,
 			RetryCount: 0,
+			TemplateID: item.TemplateID,
+			TemplateData: item.TemplateData,
+			ScheduledAt: scheduledAt,
 			CreatedAt:  time.Now().UTC(),
 			UpdatedAt:  time.Now().UTC(),
 		}
@@ -185,6 +217,65 @@ func (h *apiHandler) getBatchNotifications(w http.ResponseWriter, r *http.Reques
 	h.respondJSON(w, http.StatusOK, map[string]any{"batch_id": batchID, "notifications": list})
 }
 
+func (h *apiHandler) createTemplate(w http.ResponseWriter, r *http.Request) {
+	var payload templateRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+		return
+	}
+
+	channel := strings.ToLower(payload.Channel)
+	if payload.Name == "" || channel == "" || payload.Content == "" {
+		h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "name, channel and content are required"})
+		return
+	}
+	if !model.ValidateChannel(channel) {
+		h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid channel"})
+		return
+	}
+	if _, err := compileTemplate(payload.Content); err != nil {
+		h.respondJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid template syntax"})
+		return
+	}
+
+	now := time.Now().UTC()
+	tmpl := &model.Template{
+		ID:        uuid.NewString(),
+		Name:      payload.Name,
+		Channel:   channel,
+		Content:   payload.Content,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := h.db.SaveTemplate(tmpl); err != nil {
+		h.logger.Error("save template failed", "correlation_id", requestCorrelationID(r), "template_id", tmpl.ID, "error", err)
+		h.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save template"})
+		return
+	}
+
+	h.respondJSON(w, http.StatusCreated, tmpl)
+}
+
+func (h *apiHandler) getTemplate(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	tmpl, err := h.db.GetTemplateByID(id)
+	if err != nil {
+		h.respondJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
+		return
+	}
+	h.respondJSON(w, http.StatusOK, tmpl)
+}
+
+func (h *apiHandler) listTemplates(w http.ResponseWriter, r *http.Request) {
+	templates, err := h.db.ListTemplates()
+	if err != nil {
+		h.logger.Error("list templates failed", "correlation_id", requestCorrelationID(r), "error", err)
+		h.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list templates"})
+		return
+	}
+	h.respondJSON(w, http.StatusOK, map[string]any{"templates": templates})
+}
+
 func (h *apiHandler) health(w http.ResponseWriter, r *http.Request) {
 	h.respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -231,4 +322,54 @@ func savedBatchID(notifications []*model.Notification) string {
 		return ""
 	}
 	return notifications[0].BatchID
+}
+
+func (h *apiHandler) renderTemplate(templateID, channel string, data map[string]string) (string, error) {
+	tmpl, err := h.db.GetTemplateByID(templateID)
+	if err != nil {
+		return "", err
+	}
+	if tmpl.Channel != channel {
+		return "", errTemplateChannelMismatch
+	}
+
+	compiled, err := compileTemplate(tmpl.Content)
+	if err != nil {
+		return "", err
+	}
+	var rendered bytes.Buffer
+	if err := compiled.Execute(&rendered, data); err != nil {
+		return "", err
+	}
+	return rendered.String(), nil
+}
+
+func compileTemplate(content string) (*template.Template, error) {
+	return template.New("notification").Option("missingkey=error").Parse(content)
+}
+
+func parseOptionalFutureTime(value string) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, err
+	}
+	parsed = parsed.UTC()
+	if !parsed.After(time.Now().UTC()) {
+		return nil, errScheduledAtMustBeFuture
+	}
+	return &parsed, nil
+}
+
+var (
+	errTemplateChannelMismatch = templateError("template channel does not match notification channel")
+	errScheduledAtMustBeFuture = templateError("scheduled_at must be in the future")
+)
+
+type templateError string
+
+func (e templateError) Error() string {
+	return string(e)
 }

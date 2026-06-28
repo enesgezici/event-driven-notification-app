@@ -15,4 +15,7 @@ type Storage interface {
 	GetNotificationsByIdempotencyKey(key string) ([]*model.Notification, error)
 	CancelNotification(id string) error
 	SetNotificationQueued(id string) error
+	SaveTemplate(t *model.Template) error
+	GetTemplateByID(id string) (*model.Template, error)
+	ListTemplates() ([]*model.Template, error)
 }

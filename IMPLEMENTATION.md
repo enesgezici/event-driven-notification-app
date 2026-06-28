@@ -26,6 +26,8 @@
 - ✅ Filtering by status, channel, batch ID, recipient
 - ✅ Pagination support
 - ✅ Database-backed idempotency key support to prevent duplicate sends
+- ✅ Scheduled delivery with `scheduled_at`
+- ✅ Template-based notification creation with variable substitution
 
 #### Processing Engine
 - ✅ Asynchronous queue-based processing
@@ -36,6 +38,7 @@
   - Email/Push: Required fields validation
   - Channel support: SMS, Email, Push
 - ✅ Parallel channel processing (SMS, Email, Push workers)
+- ✅ Future scheduled notifications are delayed until their delivery time
 
 #### Database Layer
 - ✅ PostgreSQL persistent storage
@@ -143,8 +146,8 @@ Metrics Update
    - Graceful degradation
 
 2. **Advanced Features**
-   - Message templates with variable substitution
-   - Scheduled delivery (future timestamps)
+   - WebSocket status updates
+   - Distributed tracing
    - Rate limiting per user/tenant
    - Webhook signature verification
 

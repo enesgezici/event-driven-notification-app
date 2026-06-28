@@ -51,7 +51,8 @@ curl -X POST http://localhost:8080/notifications \
         "recipient": "+905551234567",
         "channel": "sms",
         "content": "Hello! This is a test.",
-        "priority": "high"
+        "priority": "high",
+        "scheduled_at": "2026-07-01T15:30:00Z"
       }
     ]
   }'
@@ -109,6 +110,42 @@ curl "http://localhost:8080/notifications?page=1&size=25"
 curl http://localhost:8080/batches/{batch-id}/notifications
 ```
 
+### Create Template
+```bash
+curl -X POST http://localhost:8080/templates \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "welcome-sms",
+    "channel": "sms",
+    "content": "Hello {{.first_name}}, your code is {{.code}}"
+  }'
+```
+
+### Send With Template
+```bash
+curl -X POST http://localhost:8080/notifications \
+  -H "Content-Type: application/json" \
+  -d '{
+    "notifications": [
+      {
+        "recipient": "+905551234567",
+        "channel": "sms",
+        "template_id": "{template-id}",
+        "template_data": {
+          "first_name": "Enes",
+          "code": "123456"
+        },
+        "priority": "normal"
+      }
+    ]
+  }'
+```
+
+### List Templates
+```bash
+curl http://localhost:8080/templates
+```
+
 ### Cancel Notification
 ```bash
 curl -X DELETE http://localhost:8080/notifications/{notification-id}
@@ -153,6 +190,8 @@ Response:
 - ✅ Filter and paginate notifications
 - ✅ Atomic batch creation with transaction rollback on partial failure
 - ✅ Database-backed idempotency support to prevent duplicate sends under concurrent requests
+- ✅ Scheduled notifications with future `scheduled_at` delivery
+- ✅ Template system with variable substitution
 
 ### Processing Engine
 - ✅ Asynchronous queue-based processing
@@ -228,6 +267,9 @@ CREATE TABLE notifications (
   retry_count INTEGER NOT NULL DEFAULT 0,
   external_message_id TEXT,
   idempotency_key TEXT,
+  template_id TEXT,
+  template_data JSONB,
+  scheduled_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
@@ -238,12 +280,23 @@ CREATE TABLE idempotency_keys (
   created_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
 CREATE INDEX idx_notifications_batch_id ON notifications(batch_id);
 CREATE INDEX idx_notifications_status ON notifications(status);
 CREATE INDEX idx_notifications_channel ON notifications(channel);
 CREATE INDEX idx_notifications_created_at ON notifications(created_at DESC);
+CREATE INDEX idx_notifications_scheduled_at ON notifications(scheduled_at);
 CREATE INDEX idx_notifications_status_channel_created_at ON notifications(status, channel, created_at DESC);
 CREATE INDEX idx_notifications_idempotency_key ON notifications(idempotency_key);
+CREATE INDEX idx_templates_channel ON templates(channel);
 ```
 
 ## Performance Considerations
@@ -275,8 +328,8 @@ go test -v ./...
 1. **Circuit Breaker**: Add circuit breaker pattern for external provider reliability
 2. **Monitoring**: Integrate with Prometheus for advanced metrics
 3. **Authentication**: Add API key or JWT authentication
-4. **Message Templates**: Support dynamic content rendering
-5. **Scheduled Notifications**: Support future delivery timestamps
+4. **WebSocket Updates**: Stream status changes to API consumers
+5. **Distributed Tracing**: Add OpenTelemetry spans across API, queue and provider calls
 
 ## Support
 

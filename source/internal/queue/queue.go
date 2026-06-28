@@ -78,6 +78,19 @@ func NewManager(db storage.Storage, providerClient *provider.WebhookProvider, co
 }
 
 func (m *Manager) Enqueue(notification *model.Notification) {
+	if notification.ScheduledAt != nil {
+		delay := time.Until(notification.ScheduledAt.UTC())
+		if delay > 0 {
+			m.logger.Info("scheduled notification delayed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "scheduled_at", notification.ScheduledAt.UTC(), "delay", delay.String())
+			time.AfterFunc(delay, func() {
+				copy := *notification
+				copy.ScheduledAt = nil
+				m.Enqueue(&copy)
+			})
+			return
+		}
+	}
+
 	m.lock.Lock()
 	heap.Push(&m.queue, &queueItem{
 		notification: notification,
@@ -149,6 +162,10 @@ func (m *Manager) processNext(channel string) {
 	}
 	if current.Status == model.StatusCancelled {
 		m.logger.Info("notification cancelled before sending", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID)
+		return
+	}
+	if current.ScheduledAt != nil && current.ScheduledAt.After(time.Now().UTC()) {
+		m.Enqueue(current)
 		return
 	}
 

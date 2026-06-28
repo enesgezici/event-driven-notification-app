@@ -94,6 +94,37 @@ paths:
       responses:
         '200':
           description: Cancelled
+  /templates:
+    post:
+      summary: Create a notification template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateCreate'
+      responses:
+        '201':
+          description: Created
+    get:
+      summary: List templates
+      responses:
+        '200':
+          description: Template list
+  /templates/{id}:
+    get:
+      summary: Get template by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Template
+        '404':
+          description: Not found
   /batches/{batch_id}/notifications:
     get:
       summary: Query notifications by batch ID
@@ -132,7 +163,7 @@ components:
             $ref: '#/components/schemas/NotificationCreate'
     NotificationCreate:
       type: object
-      required: [recipient, channel, content]
+      required: [recipient, channel]
       properties:
         recipient:
           type: string
@@ -141,7 +172,27 @@ components:
           enum: [sms, email, push]
         content:
           type: string
+        template_id:
+          type: string
+        template_data:
+          type: object
+          additionalProperties:
+            type: string
+        scheduled_at:
+          type: string
+          format: date-time
         priority:
           type: string
           enum: [high, normal, low]
           default: normal
+    TemplateCreate:
+      type: object
+      required: [name, channel, content]
+      properties:
+        name:
+          type: string
+        channel:
+          type: string
+          enum: [sms, email, push]
+        content:
+          type: string
