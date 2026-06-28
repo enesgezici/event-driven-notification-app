@@ -14,7 +14,7 @@ Bu proje, SMS, Email ve Push kanalında bildirim gönderebilen ölçeklenebilir 
 
 ### 2. Yapılandırma
 - `source/config/config.go`
-  - `SERVER_ADDRESS`, `DATABASE_PATH`, `WEBHOOK_URL` ortam değişkenleri
+  - `SERVER_ADDRESS`, `DATABASE_URL`, `WEBHOOK_URL` ortam değişkenleri
   - Zorunlu webhook URL kontrolü
 
 ### 3. Veri Modeli
@@ -24,10 +24,10 @@ Bu proje, SMS, Email ve Push kanalında bildirim gönderebilen ölçeklenebilir 
   - Kanal ve içerik doğrulamaları
 
 ### 4. Depolama Katmanı
-- `source/internal/storage/sqlite.go`
-  - SQLite bağlantısı
+- `source/internal/storage/postgres.go`
+  - PostgreSQL bağlantısı
   - Schema migration
-  - Bildirim kaydetme, güncelleme, sorgulama ve iptal etme
+  - Transaction ile batch bildirim kaydetme, güncelleme, sorgulama ve iptal etme
   - Arama filtreleme ve sayfalama
 
 ### 5. Kuyruk Yönetimi
@@ -66,7 +66,7 @@ Bu proje, SMS, Email ve Push kanalında bildirim gönderebilen ölçeklenebilir 
 ```bash
 export WEBHOOK_URL="https://webhook.site/fa8d1250-1966-4b1a-91f5-4c2847138075"
 export SERVER_ADDRESS=":8080"
-export DATABASE_PATH="./data/notifications.db"
+export DATABASE_URL="postgres://notification:notification@localhost:5432/notifications?sslmode=disable"
 ```
 3. Veritabanı klasörünü oluşturun:
 ```bash
@@ -83,7 +83,7 @@ go build -o notification-server ./cmd/notification-server
 - Toplu bildirim oluşturma (maksimum 1000)
 - Filtreleme ve sayfalama
 - Kanala göre öncelik sıralaması
-- İdempotentlik desteği
+- PostgreSQL primary key ile korunan idempotentlik desteği
 - Gerçek zamanlı metrikler
 - Sağlık kontrolü
 - Dış webhook entegrasyonu
@@ -93,18 +93,19 @@ go build -o notification-server ./cmd/notification-server
 - `docker-compose.yml` ve `Dockerfile` mevcut
 - `README.md` ve `IMPLEMENTATION.md` proje dokümantasyonu sağlar
 - `test.sh` temel uçtan uca testi kolaylaştırır
-- Veri saklama SQLite üzerinden yapılır, basit ve taşınabilir
+- Veri saklama PostgreSQL üzerinden yapılır; yüksek trafik ve eşzamanlı yazma için SQLite'a göre daha uygundur
 - Sistemin tek instans olduğu; dağıtık kuyruğa ihtiyaç varsa Redis veya RabbitMQ eklenebilir
+- Loglar JSON structured formatta üretilir ve correlation ID alanı taşır
 
 ## Dikkat Edilmesi Gerekenler
 
 - webhook.site varsayılan yanıtları 200 dönebilir, bu nedenle provider tarafında hem 200 hem 202 kabul ediliyor.
-- `idempotency_key` alanı boşsa `NULL` olarak kaydediliyor.
+- `idempotency_key` alanı boşsa `NULL` olarak kaydediliyor; dolu olduğunda `idempotency_keys` tablosu duplicate batch isteklerini atomik olarak engelliyor.
 - Posta gönderimleri dış sağlayıcıya gerçekten iletilmiyor; webhook.site ile simülasyon sağlanıyor.
 
 ## Geliştirme Adımları
 
-- Exponential backoff ile retry mantığı eklenebilir
+- Dead-letter queue tablosu eklenebilir
 - Kuyruk kalıcılığı için Redis/RabbitMQ kullanılabilir
 - API kimlik doğrulaması eklenebilir
 - Prometheus/Grafana entegrasyonu ile monitoring genişletilebilir

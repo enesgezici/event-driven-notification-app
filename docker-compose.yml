@@ -9,15 +9,32 @@ services:
       - "8080:8080"
     environment:
       SERVER_ADDRESS: ":8080"
-      DATABASE_PATH: "/data/notifications.db"
+      DATABASE_URL: "postgres://notification:notification@postgres:5432/notifications?sslmode=disable"
       WEBHOOK_URL: ${WEBHOOK_URL}
-    volumes:
-      - notification_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
       timeout: 5s
       retries: 3
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: notification
+      POSTGRES_PASSWORD: notification
+      POSTGRES_DB: notifications
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notification -d notifications"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
-  notification_data:
+  postgres_data:

@@ -4,10 +4,7 @@
 
 export WEBHOOK_URL="https://webhook.site/fa8d1250-1966-4b1a-91f5-4c2847138075"
 export SERVER_ADDRESS=":8080"
-export DATABASE_PATH="./data/notifications.db"
-
-# Create data directory
-mkdir -p ./source/data
+export DATABASE_URL="postgres://notification:notification@localhost:5432/notifications?sslmode=disable"
 
 # Install dependencies
 cd ./source
@@ -20,4 +17,4 @@ echo "✓ Server will run on http://localhost:8080"
 echo ""
 echo "To start the server, run:"
 echo "  cd source"
-echo "  WEBHOOK_URL='$WEBHOOK_URL' ./notification-server"
+echo "  WEBHOOK_URL='$WEBHOOK_URL' DATABASE_URL='$DATABASE_URL' ./notification-server"

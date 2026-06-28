@@ -6,6 +6,7 @@ Event-Driven Notification Application - Scalable SMS, Email, Push notifications 
 
 ### Prerequisites
 - Go 1.21+ or Docker
+- PostgreSQL 16+ for local runs, or Docker Compose
 - Webhook URL from [webhook.site](https://webhook.site)
 
 ### 1. Setup with Your Webhook URL
@@ -22,9 +23,8 @@ Session ID: dad7d86c-b299-4b15-a40b-dd8bfa7c94ad
 cd source
 export WEBHOOK_URL="https://webhook.site/fa8d1250-1966-4b1a-91f5-4c2847138075"
 export SERVER_ADDRESS=":8080"
-export DATABASE_PATH="./data/notifications.db"
+export DATABASE_URL="postgres://notification:notification@localhost:5432/notifications?sslmode=disable"
 
-mkdir -p data
 go mod download
 ./notification-server
 ```
@@ -37,10 +37,14 @@ WEBHOOK_URL="https://webhook.site/fa8d1250-1966-4b1a-91f5-4c2847138075" docker-c
 
 ## API Endpoints
 
+OpenAPI specification is available at `docs/openapi.yaml`.
+
 ### Create Notification(s)
 ```bash
 curl -X POST http://localhost:8080/notifications \
   -H "Content-Type: application/json" \
+  -H "X-Correlation-ID: request-123" \
+  -H "Idempotency-Key: campaign-2026-06-25-001" \
   -d '{
     "notifications": [
       {
@@ -93,8 +97,16 @@ curl "http://localhost:8080/notifications?channel=sms"
 # Filter by batch
 curl "http://localhost:8080/notifications?batch_id=550e8400-e29b-41d4-a716-446655440000"
 
+# Filter by date range (RFC3339)
+curl "http://localhost:8080/notifications?from=2026-06-25T00:00:00Z&to=2026-06-26T00:00:00Z"
+
 # Pagination
 curl "http://localhost:8080/notifications?page=1&size=25"
+```
+
+### Query Batch Status
+```bash
+curl http://localhost:8080/batches/{batch-id}/notifications
 ```
 
 ### Cancel Notification
@@ -123,6 +135,11 @@ Response:
   "queue_depth": 5,
   "success_count": 42,
   "failure_count": 2,
+  "retry_count": 3,
+  "average_latency_ms": 84.2,
+  "success_rate": 0.95,
+  "failure_rate": 0.05,
+  "total_deliveries": 44,
   "last_updated": "2026-06-25T14:35:22Z"
 }
 ```
@@ -134,7 +151,8 @@ Response:
 - ✅ Query notification status by ID or batch ID
 - ✅ Cancel pending notifications
 - ✅ Filter and paginate notifications
-- ✅ Idempotency support to prevent duplicates
+- ✅ Atomic batch creation with transaction rollback on partial failure
+- ✅ Database-backed idempotency support to prevent duplicate sends under concurrent requests
 
 ### Processing Engine
 - ✅ Asynchronous queue-based processing
@@ -144,16 +162,18 @@ Response:
 - ✅ Structured channel support (SMS, Email, Push)
 
 ### Reliability
-- ✅ Persistent SQLite database
+- ✅ Persistent PostgreSQL database
 - ✅ Graceful shutdown
 - ✅ Error handling and status tracking
-- ✅ Automatic retry on failure
+- ✅ Automatic retry on failure with exponential backoff
+- ✅ PostgreSQL persistence with connection pooling and query indexes
 
 ### Observability
 - ✅ Real-time metrics endpoint
 - ✅ Health check endpoint
-- ✅ Structured logging with correlation IDs
+- ✅ JSON structured logging with correlation IDs
 - ✅ Queue depth monitoring
+- ✅ GitHub Actions CI for formatting and tests
 
 ## Project Structure
 
@@ -171,7 +191,7 @@ Response:
 │   │   │   ├── queue.go            # Priority queue manager
 │   │   │   └── queue_extra.go      # Enhancements
 │   │   ├── storage/
-│   │   │   ├── sqlite.go           # Database layer
+│   │   │   ├── postgres.go         # PostgreSQL database layer
 │   │   │   └── types.go            # Storage interface
 │   │   ├── metrics/
 │   │   │   └── metrics.go          # Performance metrics
@@ -190,7 +210,7 @@ Response:
 
 Environment variables:
 - `SERVER_ADDRESS` - Server listen address (default: `:8080`)
-- `DATABASE_PATH` - SQLite database file path (default: `./data/notifications.db`)
+- `DATABASE_URL` - PostgreSQL connection string (default: `postgres://notification:notification@localhost:5432/notifications?sslmode=disable`)
 - `WEBHOOK_URL` - External provider webhook URL (required)
 
 ## Database Schema
@@ -208,21 +228,30 @@ CREATE TABLE notifications (
   retry_count INTEGER NOT NULL DEFAULT 0,
   external_message_id TEXT,
   idempotency_key TEXT,
-  created_at DATETIME NOT NULL,
-  updated_at DATETIME NOT NULL
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE idempotency_keys (
+  idempotency_key TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX idx_notifications_batch_id ON notifications(batch_id);
 CREATE INDEX idx_notifications_status ON notifications(status);
 CREATE INDEX idx_notifications_channel ON notifications(channel);
-CREATE UNIQUE INDEX idx_notifications_idempotency_key ON notifications(idempotency_key);
+CREATE INDEX idx_notifications_created_at ON notifications(created_at DESC);
+CREATE INDEX idx_notifications_status_channel_created_at ON notifications(status, channel, created_at DESC);
+CREATE INDEX idx_notifications_idempotency_key ON notifications(idempotency_key);
 ```
 
 ## Performance Considerations
 
 - **Queue Processing**: Each channel processes messages concurrently with 10ms polling intervals
 - **Rate Limiting**: Maximum 100 messages/second per channel (configurable)
-- **Database**: SQLite with appropriate indices for fast queries
+- **Database**: PostgreSQL with pooled connections and indexed status/channel/date queries
+- **Consistency**: Batch inserts are transactional, and idempotency keys are protected by a PostgreSQL primary key
 - **Memory**: Priority heap for efficient notification processing
 
 ## Testing
@@ -243,11 +272,11 @@ go test -v ./...
 
 ## Next Steps
 
-1. **Retry Logic**: Implement exponential backoff for failed deliveries
-2. **Circuit Breaker**: Add circuit breaker pattern for external provider reliability
-3. **Monitoring**: Integrate with Prometheus for advanced metrics
-4. **Authentication**: Add API key or JWT authentication
-5. **Message Templates**: Support dynamic content rendering
+1. **Circuit Breaker**: Add circuit breaker pattern for external provider reliability
+2. **Monitoring**: Integrate with Prometheus for advanced metrics
+3. **Authentication**: Add API key or JWT authentication
+4. **Message Templates**: Support dynamic content rendering
+5. **Scheduled Notifications**: Support future delivery timestamps
 
 ## Support
 

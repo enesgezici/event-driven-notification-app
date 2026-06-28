@@ -1,13 +1,12 @@
 package config
 
 import (
-	"log"
 	"os"
 )
 
 type Config struct {
 	ServerAddress string
-	DatabasePath  string
+	DatabaseURL   string
 	WebhookURL    string
 }
 
@@ -16,17 +15,14 @@ func LoadConfig() *Config {
 	if addr == "" {
 		addr = ":8080"
 	}
-	path := os.Getenv("DATABASE_PATH")
-	if path == "" {
-		path = "./data/notifications.db"
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		databaseURL = "postgres://notification:notification@localhost:5432/notifications?sslmode=disable"
 	}
 	webhook := os.Getenv("WEBHOOK_URL")
-	if webhook == "" {
-		log.Fatal("WEBHOOK_URL environment variable is required")
-	}
 	return &Config{
 		ServerAddress: addr,
-		DatabasePath:  path,
+		DatabaseURL:   databaseURL,
 		WebhookURL:    webhook,
 	}
 }

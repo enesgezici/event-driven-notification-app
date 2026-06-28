@@ -5,7 +5,7 @@
 ### Core Architecture
 - **API Server**: Go HTTP server with chi router
 - **Message Queue**: In-memory priority queue with heap-based ordering
-- **Database**: SQLite with proper indexing and schema
+- **Database**: PostgreSQL with proper indexing, connection pooling, and schema
 - **Webhook Integration**: HTTP client for external provider communication
 - **Metrics**: Real-time queue depth and success/failure tracking
 
@@ -25,7 +25,7 @@
 - ✅ Cancellation of pending notifications
 - ✅ Filtering by status, channel, batch ID, recipient
 - ✅ Pagination support
-- ✅ Idempotency key support (optional) to prevent duplicates
+- ✅ Database-backed idempotency key support to prevent duplicate sends
 
 #### Processing Engine
 - ✅ Asynchronous queue-based processing
@@ -38,10 +38,11 @@
 - ✅ Parallel channel processing (SMS, Email, Push workers)
 
 #### Database Layer
-- ✅ SQLite persistent storage
+- ✅ PostgreSQL persistent storage
 - ✅ Automated migrations on startup
 - ✅ Indexed queries (batch_id, status, channel)
-- ✅ Transaction support for consistency
+- ✅ Transaction support for atomic batch creation
+- ✅ Idempotency key lock table for concurrent duplicate request protection
 - ✅ Time-series data tracking (created_at, updated_at)
 
 #### External Integration
@@ -53,8 +54,8 @@
 #### Observability
 - ✅ Health check endpoint
 - ✅ Metrics endpoint with queue statistics
-- ✅ Structured logging with timestamps
-- ✅ Correlation ID support via batch IDs
+- ✅ JSON structured logging with timestamps
+- ✅ Correlation ID support via `X-Correlation-ID`, idempotency key, and batch IDs
 - ✅ Success/failure rate tracking
 
 ### Deployment
@@ -101,7 +102,7 @@ Tested end-to-end flow:
 
 - **Language**: Go 1.25
 - **HTTP Framework**: chi/v5 (lightweight router)
-- **Database**: SQLite (modernc.org/sqlite)
+- **Database**: PostgreSQL (github.com/lib/pq)
 - **JSON**: Standard library encoding/json
 - **UUID**: github.com/google/uuid
 - **Containerization**: Docker & Docker Compose
@@ -132,33 +133,28 @@ Metrics Update
 - Success rate: 100% (with webhook.site)
 - Queue throughput: ≥100 msg/sec per channel
 - Memory usage: < 50MB for 10K queued notifications
-- Database: SQLite (single file, portable)
+- Database: PostgreSQL (indexed and better suited for burst traffic)
 
 ## 🎯 Next Enhancement Opportunities
 
-1. **Retry Logic**
-   - Exponential backoff for failed deliveries
-   - Max retry attempts per notification
-   - Dead letter queue for permanent failures
-
-2. **Circuit Breaker**
+1. **Circuit Breaker**
    - Provider health monitoring
    - Automatic fallback on failures
    - Graceful degradation
 
-3. **Advanced Features**
+2. **Advanced Features**
    - Message templates with variable substitution
    - Scheduled delivery (future timestamps)
    - Rate limiting per user/tenant
    - Webhook signature verification
 
-4. **Monitoring & Analytics**
+3. **Monitoring & Analytics**
    - Prometheus metrics export
    - Grafana dashboard
    - ELK stack integration
    - Performance benchmarking
 
-5. **Operational**
+4. **Operational**
    - Database backups strategy
    - Horizontal scaling (Redis for queue)
    - API authentication (JWT/API keys)
@@ -167,9 +163,9 @@ Metrics Update
 ## 🔐 Known Limitations
 
 1. Single-instance only (in-memory queue)
-2. No persistent queue (messages lost on restart)
+2. Queue is database-recoverable but not distributed across multiple API instances
 3. Webhook.site returns 200 but spec expects 202
-4. No message deduplication across batch restarts
+4. No dead-letter queue table for permanently failed notifications
 5. No tenant/multi-account isolation
 
 ## 📝 Build & Run Commands

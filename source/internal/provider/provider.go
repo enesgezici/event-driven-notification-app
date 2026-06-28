@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -15,7 +15,7 @@ import (
 type WebhookProvider struct {
 	url    string
 	client *http.Client
-	logger *log.Logger
+	logger *slog.Logger
 }
 
 type providerRequest struct {
@@ -34,7 +34,7 @@ type SendResult struct {
 	MessageID string
 }
 
-func NewWebhookProvider(url string, logger *log.Logger) *WebhookProvider {
+func NewWebhookProvider(url string, logger *slog.Logger) *WebhookProvider {
 	return &WebhookProvider{
 		url: url,
 		client: &http.Client{

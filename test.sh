@@ -62,7 +62,7 @@ echo ""
 
 # Test 5: List notifications
 echo "5️⃣  List Sent Notifications"
-curl -s "$BASE_URL/notifications?status=sent&limit=1" | jq '.notifications[0]'
+curl -s "$BASE_URL/notifications?status=sent&size=1" | jq '.notifications[0]'
 echo ""
 
 echo "✅ Test completed!"

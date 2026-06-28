@@ -3,7 +3,7 @@ package queue
 import (
 	"container/heap"
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -50,17 +50,19 @@ func (pq *priorityQueue) Pop() any {
 }
 
 type Manager struct {
-	db              *storage.SQLiteStorage
+	db              storage.Storage
 	provider        *provider.WebhookProvider
 	metrics         *metrics.Collector
-	logger          *log.Logger
+	logger          *slog.Logger
 	queue           priorityQueue
 	lock            sync.Mutex
 	channelTickers  map[string]*time.Ticker
 	stopWorkersOnce sync.Once
 }
 
-func NewManager(db *storage.SQLiteStorage, providerClient *provider.WebhookProvider, collector *metrics.Collector, logger *log.Logger) *Manager {
+const maxDeliveryAttempts = 3
+
+func NewManager(db storage.Storage, providerClient *provider.WebhookProvider, collector *metrics.Collector, logger *slog.Logger) *Manager {
 	return &Manager{
 		db:       db,
 		provider: providerClient,
@@ -107,13 +109,13 @@ func (m *Manager) StartWorkers(ctx context.Context) {
 func (m *Manager) loadPendingNotifications() {
 	pending, err := m.db.GetPendingNotifications()
 	if err != nil {
-		m.logger.Printf("failed to load pending notifications: %v", err)
+		m.logger.Error("load pending notifications failed", "error", err)
 		return
 	}
 	for _, n := range pending {
 		m.Enqueue(n)
 	}
-	m.logger.Printf("loaded %d pending notifications into queue", len(pending))
+	m.logger.Info("pending notifications loaded", "notification_count", len(pending))
 }
 
 func (m *Manager) processNext(channel string) {
@@ -142,34 +144,60 @@ func (m *Manager) processNext(channel string) {
 	notification := item.notification
 	current, err := m.db.GetNotificationByID(notification.ID)
 	if err != nil {
-		m.logger.Printf("fetch notification failed: %v", err)
+		m.logger.Error("fetch notification failed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "error", err)
 		return
 	}
 	if current.Status == model.StatusCancelled {
-		m.logger.Printf("notification %s cancelled before sending", notification.ID)
+		m.logger.Info("notification cancelled before sending", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID)
 		return
 	}
 
 	if err := m.db.SetNotificationQueued(notification.ID); err != nil {
-		m.logger.Printf("mark queued error: %v", err)
+		m.logger.Error("mark notification queued failed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "error", err)
 	}
 
+	startedAt := time.Now()
 	result, err := m.provider.Send(notification)
 	if err != nil {
-		notification.Status = model.StatusFailed
 		notification.Error = err.Error()
 		notification.RetryCount = current.RetryCount + 1
+		if notification.RetryCount < maxDeliveryAttempts {
+			notification.Status = model.StatusPending
+			notification.UpdatedAt = time.Now().UTC()
+			if updateErr := m.db.UpdateNotification(notification); updateErr != nil {
+				m.logger.Error("update retry notification failed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "error", updateErr)
+				return
+			}
+			delay := retryDelay(notification.RetryCount)
+			m.metrics.IncrementRetry()
+			m.logger.Warn("notification delivery retry scheduled", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "channel", notification.Channel, "retry_count", notification.RetryCount, "retry_in", delay.String(), "error", err)
+			time.AfterFunc(delay, func() {
+				m.Enqueue(notification)
+			})
+			return
+		}
+		notification.Status = model.StatusFailed
+		m.metrics.RecordLatency(time.Since(startedAt))
 		m.metrics.IncrementFailed()
 	} else {
 		notification.Status = model.StatusSent
+		notification.Error = ""
 		notification.ExternalMessageID = result.MessageID
+		m.metrics.RecordLatency(time.Since(startedAt))
 		m.metrics.IncrementSuccess()
 	}
 	notification.UpdatedAt = time.Now().UTC()
 
 	if err := m.db.UpdateNotification(notification); err != nil {
-		m.logger.Printf("update notification failed: %v", err)
+		m.logger.Error("update notification failed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "error", err)
 	}
+}
+
+func retryDelay(retryCount int) time.Duration {
+	if retryCount < 1 {
+		return time.Second
+	}
+	return time.Duration(1<<(retryCount-1)) * time.Second
 }
 
 func (m *Manager) QueueDepth() int {

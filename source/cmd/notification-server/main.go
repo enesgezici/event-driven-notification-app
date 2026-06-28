@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,16 +20,22 @@ import (
 func main() {
 	cfg := config.LoadConfig()
 
-	logger := log.New(os.Stdout, "notification-app ", log.LstdFlags|log.Lmsgprefix)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if cfg.WebhookURL == "" {
+		logger.Error("missing required configuration", "env", "WEBHOOK_URL")
+		os.Exit(1)
+	}
 
-	db, err := storage.NewSQLiteStorage(cfg.DatabasePath)
+	db, err := storage.NewPostgresStorage(cfg.DatabaseURL)
 	if err != nil {
-		logger.Fatalf("failed to initialize database: %v", err)
+		logger.Error("database initialization failed", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
 	if err := db.Migrate(); err != nil {
-		logger.Fatalf("failed to run migrations: %v", err)
+		logger.Error("database migration failed", "error", err)
+		os.Exit(1)
 	}
 
 	providerClient := provider.NewWebhookProvider(cfg.WebhookURL, logger)
@@ -45,9 +51,10 @@ func main() {
 	}
 
 	go func() {
-		logger.Printf("server listening on %s", cfg.ServerAddress)
+		logger.Info("server listening", "address", cfg.ServerAddress)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("server error: %v", err)
+			logger.Error("server failed", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -55,10 +62,10 @@ func main() {
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	<-shutdown
 
-	logger.Println("shutdown requested, stopping server...")
+	logger.Info("shutdown requested")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		logger.Printf("server shutdown error: %v", err)
+		logger.Error("server shutdown failed", "error", err)
 	}
 }
