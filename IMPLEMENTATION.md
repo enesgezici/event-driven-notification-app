@@ -35,7 +35,8 @@
 #### Processing Engine
 - ✅ Asynchronous queue-based processing
 - ✅ Priority queue (High=1, Normal=2, Low=3)
-- ✅ Per-channel worker tick of 10ms, giving an effective maximum of about 100 dispatch attempts/second per channel in a single instance
+- ✅ PostgreSQL-backed atomic job claiming for multi-instance worker coordination
+- ✅ Per-channel worker tick of 10ms, giving an effective maximum of 100 dispatch attempts/second per channel per instance
 - ✅ Content validation:
   - SMS: 160 character limit
   - Email/Push: Required fields validation
@@ -49,17 +50,19 @@
 - ✅ Indexed queries (batch_id, status, channel)
 - ✅ Transaction support for atomic batch creation
 - ✅ Idempotency key lock table for concurrent duplicate request protection
+- ✅ Atomic due-job claiming with stale queued recovery
 - ✅ Time-series data tracking (created_at, updated_at)
 
 #### External Integration
 - ✅ Webhook.site integration (with flexible response handling)
-- ✅ Idempotent HTTP requests
+- ✅ Idempotent HTTP requests via notification ID header
 - ✅ Proper error handling and retry information
 - ✅ Message ID tracking from external provider
 
 #### Observability
 - ✅ Health check endpoint
-- ✅ Metrics endpoint with queue statistics
+- ✅ PostgreSQL dependency check in health endpoint
+- ✅ Metrics endpoint with PostgreSQL-backed queue depth
 - ✅ JSON structured logging with timestamps
 - ✅ Correlation ID support via `X-Correlation-ID`, idempotency key, and batch IDs
 - ✅ Success/failure rate tracking
@@ -138,7 +141,7 @@ Metrics Update
 
 - Batch processing: 3 notifications in ~100ms
 - Success rate: 100% (with webhook.site)
-- Queue throughput: about 100 dispatch attempts/second per channel in one instance
+- Queue throughput: 100 dispatch attempts/second per channel per running instance
 - Memory usage: < 50MB for 10K queued notifications
 - Database: PostgreSQL (indexed and better suited for burst traffic)
 
@@ -169,11 +172,11 @@ Metrics Update
 
 ## 🔐 Known Limitations
 
-1. Single-instance only (in-memory queue)
-2. Queue is database-recoverable but not distributed across multiple API instances
-3. Webhook.site returns 200 but spec expects 202
-4. No dead-letter queue table for permanently failed notifications
-5. No tenant/multi-account isolation
+1. PostgreSQL-backed claiming supports multiple instances, but a dedicated queue is still better for very high sustained volume
+2. Webhook.site returns 200 by default, while the project brief expects 202
+3. No dead-letter queue table for permanently failed notifications
+4. No tenant/multi-account isolation
+5. Metrics are process-local
 
 ## 📝 Build & Run Commands
 

@@ -164,6 +164,8 @@ Response:
 {"status": "ok"}
 ```
 
+Returns `503 Service Unavailable` when PostgreSQL is not reachable.
+
 ### Metrics
 ```bash
 curl http://localhost:8080/metrics
@@ -199,7 +201,8 @@ Response:
 ### Processing Engine
 - ✅ Asynchronous queue-based processing
 - ✅ Priority queue (High, Normal, Low)
-- ✅ Per-channel dispatch pacing (about 100 attempts/second per channel in one instance)
+- ✅ PostgreSQL-backed atomic job claiming for multi-instance workers
+- ✅ Per-channel dispatch pacing (100 attempts/second per running instance)
 - ✅ Content validation (SMS: 160 char limit)
 - ✅ Structured channel support (SMS, Email, Push)
 
@@ -208,13 +211,14 @@ Response:
 - ✅ Graceful shutdown
 - ✅ Error handling and status tracking
 - ✅ Automatic retry on failure with exponential backoff
+- ✅ Stale queued job recovery after worker crashes
 - ✅ PostgreSQL persistence with connection pooling and query indexes
 
 ### Observability
 - ✅ Real-time metrics endpoint
 - ✅ Health check endpoint
 - ✅ JSON structured logging with correlation IDs
-- ✅ Queue depth monitoring
+- ✅ PostgreSQL-backed queue depth monitoring
 - ✅ GitHub Actions CI for formatting and tests
 
 ## Project Structure
@@ -299,6 +303,8 @@ CREATE INDEX idx_notifications_channel ON notifications(channel);
 CREATE INDEX idx_notifications_created_at ON notifications(created_at DESC);
 CREATE INDEX idx_notifications_scheduled_at ON notifications(scheduled_at);
 CREATE INDEX idx_notifications_status_channel_created_at ON notifications(status, channel, created_at DESC);
+CREATE INDEX idx_notifications_claim_due ON notifications(status, channel, priority, scheduled_at, created_at);
+CREATE INDEX idx_notifications_stale_queued ON notifications(status, updated_at);
 CREATE INDEX idx_notifications_idempotency_key ON notifications(idempotency_key);
 CREATE INDEX idx_templates_channel ON templates(channel);
 ```
@@ -306,10 +312,12 @@ CREATE INDEX idx_templates_channel ON templates(channel);
 ## Performance Considerations
 
 - **Queue Processing**: Each channel processes messages concurrently with 10ms polling intervals
-- **Dispatch pacing**: Each channel worker ticks every 10ms, for about 100 dispatch attempts/second per channel in one instance
+- **Dispatch pacing**: Each channel worker ticks every 10ms, for 100 dispatch attempts/second per channel per running instance
+- **Worker coordination**: Workers atomically claim due notifications in PostgreSQL to avoid duplicate sends across instances
 - **Database**: PostgreSQL with pooled connections and indexed status/channel/date queries
 - **Consistency**: Batch inserts are transactional, and idempotency keys are protected by a PostgreSQL primary key
-- **Memory**: Priority heap for efficient notification processing
+- **Recovery**: Stale queued notifications are eligible for re-claiming after a bounded timeout
+- **Metrics**: Queue depth is read from PostgreSQL pending/queued notification counts
 
 ## Testing
 

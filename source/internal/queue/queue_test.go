@@ -74,6 +74,56 @@ func TestStopWorkersCancelsDelayedScheduledEnqueue(t *testing.T) {
 	}
 }
 
+func TestNextNotificationClaimsLocalQueueItem(t *testing.T) {
+	claimed := &model.Notification{
+		ID:       "local",
+		BatchID:  "batch",
+		Channel:  "sms",
+		Priority: model.PriorityHigh,
+		Status:   model.StatusQueued,
+	}
+	db := &queueTestStorage{claimByID: map[string]*model.Notification{"local": claimed}}
+	manager := NewManager(db, nil, metrics.NewCollector(), queueTestLogger())
+	manager.Enqueue(&model.Notification{
+		ID:       "local",
+		BatchID:  "batch",
+		Channel:  "sms",
+		Priority: model.PriorityHigh,
+		Status:   model.StatusPending,
+	})
+
+	got, ok := manager.nextNotification("sms")
+	if !ok {
+		t.Fatal("expected a claimed notification")
+	}
+	if got.ID != "local" {
+		t.Fatalf("expected local notification, got %s", got.ID)
+	}
+}
+
+func TestNextNotificationClaimsFromDatabaseWhenLocalQueueEmpty(t *testing.T) {
+	db := &queueTestStorage{
+		nextByChannel: map[string]*model.Notification{
+			"sms": {
+				ID:       "db",
+				BatchID:  "batch",
+				Channel:  "sms",
+				Priority: model.PriorityNormal,
+				Status:   model.StatusQueued,
+			},
+		},
+	}
+	manager := NewManager(db, nil, metrics.NewCollector(), queueTestLogger())
+
+	got, ok := manager.nextNotification("sms")
+	if !ok {
+		t.Fatal("expected a database notification")
+	}
+	if got.ID != "db" {
+		t.Fatalf("expected db notification, got %s", got.ID)
+	}
+}
+
 func testQueueItem(id, channel string, priority model.NotificationPriority, enqueuedAt time.Time) *queueItem {
 	return &queueItem{
 		notification: &model.Notification{
@@ -92,9 +142,13 @@ func queueTestLogger() *slog.Logger {
 
 var _ storage.Storage = (*queueTestStorage)(nil)
 
-type queueTestStorage struct{}
+type queueTestStorage struct {
+	claimByID     map[string]*model.Notification
+	nextByChannel map[string]*model.Notification
+}
 
 func (s *queueTestStorage) Close() error                                 { return nil }
+func (s *queueTestStorage) Ping() error                                  { return nil }
 func (s *queueTestStorage) Migrate() error                               { return nil }
 func (s *queueTestStorage) SaveNotification(n *model.Notification) error { return nil }
 func (s *queueTestStorage) SaveNotificationsBatch(idempotencyKey string, notifications []*model.Notification) (bool, []*model.Notification, error) {
@@ -102,6 +156,14 @@ func (s *queueTestStorage) SaveNotificationsBatch(idempotencyKey string, notific
 }
 func (s *queueTestStorage) GetNotificationByID(id string) (*model.Notification, error) {
 	return nil, errQueueTestUnsupported
+}
+func (s *queueTestStorage) ClaimNotification(id string) (*model.Notification, bool, error) {
+	notification, ok := s.claimByID[id]
+	return notification, ok, nil
+}
+func (s *queueTestStorage) ClaimNextDueNotification(channel string) (*model.Notification, bool, error) {
+	notification, ok := s.nextByChannel[channel]
+	return notification, ok, nil
 }
 func (s *queueTestStorage) UpdateNotification(n *model.Notification) error { return nil }
 func (s *queueTestStorage) ListNotifications(filters map[string]string, page, size int) ([]*model.Notification, error) {
@@ -114,8 +176,8 @@ func (s *queueTestStorage) GetPendingNotificationsByBatch(batchID string) ([]*mo
 func (s *queueTestStorage) GetNotificationsByIdempotencyKey(key string) ([]*model.Notification, error) {
 	return nil, nil
 }
+func (s *queueTestStorage) QueueDepth() (int, error)                   { return 0, nil }
 func (s *queueTestStorage) CancelNotification(id string) (bool, error) { return false, nil }
-func (s *queueTestStorage) SetNotificationQueued(id string) error      { return nil }
 func (s *queueTestStorage) SaveTemplate(tmpl *model.Template) error    { return nil }
 func (s *queueTestStorage) GetTemplateByID(id string) (*model.Template, error) {
 	return nil, errQueueTestUnsupported

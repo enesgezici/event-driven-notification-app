@@ -24,8 +24,16 @@ paths:
       responses:
         '200':
           description: Existing idempotent batch returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
         '201':
           description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResponse'
         '400':
           description: Invalid request
     get:
@@ -69,6 +77,10 @@ paths:
       responses:
         '200':
           description: Notification list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationListResponse'
   /notifications/{id}:
     get:
       summary: Get notification status by ID
@@ -81,6 +93,10 @@ paths:
       responses:
         '200':
           description: Notification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
         '404':
           description: Not found
     delete:
@@ -145,12 +161,18 @@ paths:
       responses:
         '200':
           description: Metrics snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metrics'
   /health:
     get:
       summary: Health check
       responses:
         '200':
           description: Healthy
+        '503':
+          description: PostgreSQL dependency is unavailable
 components:
   schemas:
     CreateBatchRequest:
@@ -198,3 +220,80 @@ components:
           enum: [sms, email, push]
         content:
           type: string
+    BatchResponse:
+      type: object
+      properties:
+        batch_id:
+          type: string
+        notifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+    NotificationListResponse:
+      type: object
+      properties:
+        page:
+          type: integer
+        size:
+          type: integer
+        notifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+        batch_id:
+          type: string
+        recipient:
+          type: string
+        channel:
+          type: string
+          enum: [sms, email, push]
+        content:
+          type: string
+        priority:
+          type: integer
+          enum: [1, 2, 3]
+        status:
+          type: string
+          enum: [pending, queued, sent, failed, cancelled]
+        error:
+          type: string
+        retry_count:
+          type: integer
+        external_message_id:
+          type: string
+        scheduled_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Metrics:
+      type: object
+      properties:
+        queue_depth:
+          type: integer
+        success_count:
+          type: integer
+        failure_count:
+          type: integer
+        retry_count:
+          type: integer
+        average_latency_ms:
+          type: number
+        success_rate:
+          type: number
+        failure_rate:
+          type: number
+        total_deliveries:
+          type: integer
+        last_updated:
+          type: string
+          format: date-time

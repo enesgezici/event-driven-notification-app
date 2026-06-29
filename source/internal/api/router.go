@@ -282,10 +282,20 @@ func (h *apiHandler) listTemplates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *apiHandler) health(w http.ResponseWriter, r *http.Request) {
+	if err := h.db.Ping(); err != nil {
+		h.logger.Error("health check failed", "error", err)
+		h.respondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unhealthy"})
+		return
+	}
 	h.respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *apiHandler) getMetrics(w http.ResponseWriter, r *http.Request) {
+	if depth, err := h.db.QueueDepth(); err == nil {
+		h.metrics.SetQueueDepth(depth)
+	} else {
+		h.logger.Error("queue depth lookup failed", "error", err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(h.metrics.Snapshot())

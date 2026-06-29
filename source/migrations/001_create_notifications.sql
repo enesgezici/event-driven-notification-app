@@ -49,5 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_notifications_channel ON notifications(channel);
 CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_scheduled_at ON notifications(scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_status_channel_created_at ON notifications(status, channel, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_claim_due ON notifications(status, channel, priority, scheduled_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_stale_queued ON notifications(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_idempotency_key ON notifications(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_templates_channel ON templates(channel);

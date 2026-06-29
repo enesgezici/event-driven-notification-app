@@ -63,7 +63,11 @@ type Manager struct {
 	stopWorkersOnce sync.Once
 }
 
-const maxDeliveryAttempts = 3
+const (
+	maxDeliveryAttempts   = 3
+	maxMessagesPerSecond  = 100
+	channelDispatchPeriod = time.Second / maxMessagesPerSecond
+)
 
 func NewManager(db storage.Storage, providerClient *provider.WebhookProvider, collector *metrics.Collector, logger *slog.Logger) *Manager {
 	return &Manager{
@@ -73,9 +77,9 @@ func NewManager(db storage.Storage, providerClient *provider.WebhookProvider, co
 		logger:   logger,
 		queue:    make(priorityQueue, 0),
 		channelTickers: map[string]*time.Ticker{
-			"sms":   time.NewTicker(10 * time.Millisecond),
-			"email": time.NewTicker(10 * time.Millisecond),
-			"push":  time.NewTicker(10 * time.Millisecond),
+			"sms":   time.NewTicker(channelDispatchPeriod),
+			"email": time.NewTicker(channelDispatchPeriod),
+			"push":  time.NewTicker(channelDispatchPeriod),
 		},
 	}
 }
@@ -155,47 +159,49 @@ func (m *Manager) loadPendingNotifications() {
 }
 
 func (m *Manager) processNext(channel string) {
-	m.lock.Lock()
-	if len(m.queue) == 0 {
-		m.metrics.SetQueueDepth(0)
-		m.lock.Unlock()
+	notification, ok := m.nextNotification(channel)
+	if !ok {
 		return
 	}
 
+	m.deliver(notification)
+}
+
+func (m *Manager) nextNotification(channel string) (*model.Notification, bool) {
+	m.lock.Lock()
 	item := m.popNextLocked(channel)
 	m.metrics.SetQueueDepth(len(m.queue))
 	m.lock.Unlock()
 
-	if item == nil {
-		return
+	if item != nil {
+		claimed, ok, err := m.db.ClaimNotification(item.notification.ID)
+		if err != nil {
+			m.logger.Error("claim notification failed", "correlation_id", item.notification.BatchID, "notification_id", item.notification.ID, "error", err)
+			return nil, false
+		}
+		if ok {
+			return claimed, true
+		}
 	}
 
-	notification := item.notification
-	current, err := m.db.GetNotificationByID(notification.ID)
+	claimed, ok, err := m.db.ClaimNextDueNotification(channel)
 	if err != nil {
-		m.logger.Error("fetch notification failed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "error", err)
-		return
+		m.logger.Error("claim next notification failed", "channel", channel, "error", err)
+		return nil, false
 	}
-	if current.Status == model.StatusCancelled {
-		m.logger.Info("notification cancelled before sending", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID)
-		return
-	}
-	if current.ScheduledAt != nil && current.ScheduledAt.After(time.Now().UTC()) {
-		m.Enqueue(current)
-		return
-	}
+	return claimed, ok
+}
 
-	if err := m.db.SetNotificationQueued(notification.ID); err != nil {
-		m.logger.Error("mark notification queued failed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "error", err)
-	}
-
+func (m *Manager) deliver(notification *model.Notification) {
 	startedAt := time.Now()
 	result, err := m.provider.Send(notification)
 	if err != nil {
 		notification.Error = err.Error()
-		notification.RetryCount = current.RetryCount + 1
+		notification.RetryCount++
 		if notification.RetryCount < maxDeliveryAttempts {
 			notification.Status = model.StatusPending
+			retryAt := time.Now().UTC().Add(retryDelay(notification.RetryCount))
+			notification.ScheduledAt = &retryAt
 			notification.UpdatedAt = time.Now().UTC()
 			if updateErr := m.db.UpdateNotification(notification); updateErr != nil {
 				m.logger.Error("update retry notification failed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "error", updateErr)
@@ -210,12 +216,14 @@ func (m *Manager) processNext(channel string) {
 			return
 		}
 		notification.Status = model.StatusFailed
+		notification.ScheduledAt = nil
 		m.metrics.RecordLatency(time.Since(startedAt))
 		m.metrics.IncrementFailed()
 	} else {
 		notification.Status = model.StatusSent
 		notification.Error = ""
 		notification.ExternalMessageID = result.MessageID
+		notification.ScheduledAt = nil
 		m.metrics.RecordLatency(time.Since(startedAt))
 		m.metrics.IncrementSuccess()
 	}

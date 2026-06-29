@@ -44,6 +44,7 @@ This project provides a scalable notification system capable of sending notifica
 
   * Priority queue implementation
   * Channel-based worker loops
+  * PostgreSQL-backed atomic job claiming
   * Notification processing and delivery logic
   * Queue depth monitoring
 
@@ -72,7 +73,7 @@ This project provides a scalable notification system capable of sending notifica
   * Retrieve notification status: `GET /notifications/{id}`
   * List notifications with filtering: `GET /notifications`
   * Cancel notification: `DELETE /notifications/{id}`
-  * Health check: `GET /health`
+  * Health check with PostgreSQL dependency check: `GET /health`
   * Metrics endpoint: `GET /metrics`
 
 ## Usage
@@ -111,7 +112,7 @@ go build -o notification-server ./cmd/notification-server
 * `README.md` and `IMPLEMENTATION.md` provide project documentation.
 * `test.sh` simplifies basic end-to-end testing against a running server.
 * PostgreSQL is used for persistent storage and is better suited than SQLite for high traffic and concurrent writes.
-* The system is designed as a single-instance deployment; if distributed queueing is required, Redis or RabbitMQ can be integrated.
+* PostgreSQL-backed claiming allows multiple application instances to share work; for larger sustained traffic, Redis, RabbitMQ, Kafka, or another dedicated queue can be integrated.
 * Logs are generated in JSON structured format and include a correlation ID field where request context is available.
 
 ## Important Considerations

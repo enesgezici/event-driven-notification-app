@@ -14,6 +14,8 @@ type PostgresStorage struct {
 	db *sql.DB
 }
 
+const staleQueuedAfter = 2 * time.Minute
+
 func NewPostgresStorage(databaseURL string) (*PostgresStorage, error) {
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
@@ -33,6 +35,10 @@ func NewPostgresStorage(databaseURL string) (*PostgresStorage, error) {
 
 func (s *PostgresStorage) Close() error {
 	return s.db.Close()
+}
+
+func (s *PostgresStorage) Ping() error {
+	return s.db.Ping()
 }
 
 func (s *PostgresStorage) Migrate() error {
@@ -83,6 +89,8 @@ func (s *PostgresStorage) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_scheduled_at ON notifications(scheduled_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_status_channel_created_at ON notifications(status, channel, created_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_claim_due ON notifications(status, channel, priority, scheduled_at, created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_stale_queued ON notifications(status, updated_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_idempotency_key ON notifications(idempotency_key);`,
 		`CREATE INDEX IF NOT EXISTS idx_templates_channel ON templates(channel);`,
 	}
@@ -206,15 +214,92 @@ func (s *PostgresStorage) GetNotificationByID(id string) (*model.Notification, e
 
 func (s *PostgresStorage) UpdateNotification(n *model.Notification) error {
 	_, err := s.db.Exec(
-		`UPDATE notifications SET status = $1, error = $2, retry_count = $3, external_message_id = $4, updated_at = $5 WHERE id = $6`,
+		`UPDATE notifications SET status = $1, error = $2, retry_count = $3, external_message_id = $4, scheduled_at = $5, updated_at = $6 WHERE id = $7`,
 		n.Status,
 		n.Error,
 		n.RetryCount,
 		n.ExternalMessageID,
+		nullableTime(n.ScheduledAt),
 		n.UpdatedAt.UTC(),
 		n.ID,
 	)
 	return err
+}
+
+func (s *PostgresStorage) ClaimNotification(id string) (*model.Notification, bool, error) {
+	row := s.db.QueryRow(
+		`UPDATE notifications
+		 SET status = $1, updated_at = $2
+		 WHERE id = $3
+		   AND status = $4
+		   AND (scheduled_at IS NULL OR scheduled_at <= $2)
+		 RETURNING `+notificationSelectColumns,
+		model.StatusQueued,
+		time.Now().UTC(),
+		id,
+		model.StatusPending,
+	)
+	n, err := scanNotification(row)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return n, true, nil
+}
+
+func (s *PostgresStorage) ClaimNextDueNotification(channel string) (*model.Notification, bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC()
+	staleBefore := now.Add(-staleQueuedAfter)
+	var id string
+	err = tx.QueryRow(
+		`SELECT id
+		 FROM notifications
+		 WHERE channel = $1
+		   AND (
+		     (status = $2 AND (scheduled_at IS NULL OR scheduled_at <= $3))
+		     OR (status = $4 AND updated_at < $5)
+		   )
+		 ORDER BY priority ASC, COALESCE(scheduled_at, created_at) ASC
+		 FOR UPDATE SKIP LOCKED
+		 LIMIT 1`,
+		channel,
+		model.StatusPending,
+		now,
+		model.StatusQueued,
+		staleBefore,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, false, tx.Commit()
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	row := tx.QueryRow(
+		`UPDATE notifications
+		 SET status = $1, updated_at = $2
+		 WHERE id = $3
+		 RETURNING `+notificationSelectColumns,
+		model.StatusQueued,
+		now,
+		id,
+	)
+	n, err := scanNotification(row)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, false, err
+	}
+	return n, true, nil
 }
 
 func (s *PostgresStorage) ListNotifications(filters map[string]string, page, size int) ([]*model.Notification, error) {
@@ -255,14 +340,13 @@ func (s *PostgresStorage) ListNotifications(filters map[string]string, page, siz
 	return s.queryNotifications(query, args...)
 }
 
-func (s *PostgresStorage) SetNotificationQueued(id string) error {
-	_, err := s.db.Exec(`UPDATE notifications SET status = $1, updated_at = $2 WHERE id = $3`, model.StatusQueued, time.Now().UTC(), id)
-	return err
-}
-
 func (s *PostgresStorage) GetPendingNotifications() ([]*model.Notification, error) {
-	query := `SELECT ` + notificationSelectColumns + ` FROM notifications WHERE status IN ($1, $2) ORDER BY priority ASC, COALESCE(scheduled_at, created_at) ASC`
-	return s.queryNotifications(query, model.StatusPending, model.StatusQueued)
+	query := `SELECT ` + notificationSelectColumns + `
+		FROM notifications
+		WHERE status = $1
+		  AND (scheduled_at IS NULL OR scheduled_at <= $2)
+		ORDER BY priority ASC, COALESCE(scheduled_at, created_at) ASC`
+	return s.queryNotifications(query, model.StatusPending, time.Now().UTC())
 }
 
 func (s *PostgresStorage) GetPendingNotificationsByBatch(batchID string) ([]*model.Notification, error) {
@@ -273,6 +357,18 @@ func (s *PostgresStorage) GetPendingNotificationsByBatch(batchID string) ([]*mod
 func (s *PostgresStorage) GetNotificationsByIdempotencyKey(key string) ([]*model.Notification, error) {
 	query := `SELECT ` + notificationSelectColumns + ` FROM notifications WHERE idempotency_key = $1`
 	return s.queryNotifications(query, key)
+}
+
+func (s *PostgresStorage) QueueDepth() (int, error) {
+	var depth int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*)
+		 FROM notifications
+		 WHERE status IN ($1, $2)`,
+		model.StatusPending,
+		model.StatusQueued,
+	).Scan(&depth)
+	return depth, err
 }
 
 func (s *PostgresStorage) getNotificationsByIdempotencyKeyTx(tx *sql.Tx, key string) ([]*model.Notification, error) {
@@ -296,13 +392,11 @@ func (s *PostgresStorage) getNotificationsByIdempotencyKeyTx(tx *sql.Tx, key str
 
 func (s *PostgresStorage) CancelNotification(id string) (bool, error) {
 	result, err := s.db.Exec(
-		`UPDATE notifications SET status = $1, updated_at = $2 WHERE id = $3 AND status IN ($4, $5, $6)`,
+		`UPDATE notifications SET status = $1, updated_at = $2 WHERE id = $3 AND status = $4`,
 		model.StatusCancelled,
 		time.Now().UTC(),
 		id,
 		model.StatusPending,
-		model.StatusQueued,
-		model.StatusFailed,
 	)
 	if err != nil {
 		return false, err

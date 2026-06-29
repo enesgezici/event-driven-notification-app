@@ -54,7 +54,17 @@ func (p *WebhookProvider) Send(notification *model.Notification) (*SendResult, e
 	if err != nil {
 		return nil, err
 	}
-	resp, err := p.client.Post(p.url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, p.url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", notification.ID)
+	if notification.BatchID != "" {
+		req.Header.Set("X-Correlation-ID", notification.BatchID)
+	}
+
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return nil, err
 	}

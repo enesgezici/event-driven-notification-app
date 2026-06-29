@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -87,6 +88,20 @@ func TestCancelNotificationReturnsOKWhenCancelled(t *testing.T) {
 	}
 }
 
+func TestHealthReturnsUnavailableWhenStoragePingFails(t *testing.T) {
+	db := &routerTestStorage{pingErr: errors.New("database down")}
+	router := NewRouter(db, nil, metrics.NewCollector(), testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, res.Code)
+	}
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
@@ -95,9 +110,11 @@ var _ storage.Storage = (*routerTestStorage)(nil)
 
 type routerTestStorage struct {
 	cancelled bool
+	pingErr   error
 }
 
 func (s *routerTestStorage) Close() error                                 { return nil }
+func (s *routerTestStorage) Ping() error                                  { return s.pingErr }
 func (s *routerTestStorage) Migrate() error                               { return nil }
 func (s *routerTestStorage) SaveNotification(n *model.Notification) error { return nil }
 func (s *routerTestStorage) SaveNotificationsBatch(idempotencyKey string, notifications []*model.Notification) (bool, []*model.Notification, error) {
@@ -105,6 +122,12 @@ func (s *routerTestStorage) SaveNotificationsBatch(idempotencyKey string, notifi
 }
 func (s *routerTestStorage) GetNotificationByID(id string) (*model.Notification, error) {
 	return nil, errTestStorageUnsupported
+}
+func (s *routerTestStorage) ClaimNotification(id string) (*model.Notification, bool, error) {
+	return nil, false, nil
+}
+func (s *routerTestStorage) ClaimNextDueNotification(channel string) (*model.Notification, bool, error) {
+	return nil, false, nil
 }
 func (s *routerTestStorage) UpdateNotification(n *model.Notification) error { return nil }
 func (s *routerTestStorage) ListNotifications(filters map[string]string, page, size int) ([]*model.Notification, error) {
@@ -117,8 +140,8 @@ func (s *routerTestStorage) GetPendingNotificationsByBatch(batchID string) ([]*m
 func (s *routerTestStorage) GetNotificationsByIdempotencyKey(key string) ([]*model.Notification, error) {
 	return nil, nil
 }
+func (s *routerTestStorage) QueueDepth() (int, error)                   { return 0, nil }
 func (s *routerTestStorage) CancelNotification(id string) (bool, error) { return s.cancelled, nil }
-func (s *routerTestStorage) SetNotificationQueued(id string) error      { return nil }
 func (s *routerTestStorage) SaveTemplate(tmpl *model.Template) error    { return nil }
 func (s *routerTestStorage) GetTemplateByID(id string) (*model.Template, error) {
 	return nil, errTestStorageUnsupported
