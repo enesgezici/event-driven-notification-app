@@ -1,114 +1,135 @@
 # Event-Driven Notification System
 
-## Proje Özeti
+## Project Overview
 
-Bu proje, SMS, Email ve Push kanalında bildirim gönderebilen ölçeklenebilir bir bildirim sistemi sunar. Sistem, bildirimi alır, veritabanına kaydeder, öncelik sırasına göre kuyrukta işler ve webhook üzerinden dış sağlayıcıya gönderir.
+This project provides a scalable notification system capable of sending notifications through SMS, Email, and Push channels. The system receives notifications, stores them in the database, processes them in a queue based on priority, and delivers them to an external provider via webhook integration.
 
-## Bileşenler
+## Components
 
-### 1. API Sunucusu
-- `source/cmd/notification-server/main.go`
-  - Sunucu başlatma ve graceful shutdown
-  - Yapılandırma yükleme
-  - router oluşturma
+### 1. API Server
 
-### 2. Yapılandırma
-- `source/config/config.go`
-  - `SERVER_ADDRESS`, `DATABASE_URL`, `WEBHOOK_URL` ortam değişkenleri
-  - Zorunlu webhook URL kontrolü
+* `source/cmd/notification-server/main.go`
 
-### 3. Veri Modeli
-- `source/internal/model/notification.go`
-  - Bildirim durumu ve öncelik sabitleri
-  - Bildirim yapısı (`Notification`)
-  - Kanal ve içerik doğrulamaları
+  * Server startup and graceful shutdown
+  * Configuration loading
+  * Router initialization
 
-### 4. Depolama Katmanı
-- `source/internal/storage/postgres.go`
-  - PostgreSQL bağlantısı
-  - Schema migration
-  - Transaction ile batch bildirim kaydetme, güncelleme, sorgulama ve iptal etme
-  - Arama filtreleme ve sayfalama
+### 2. Configuration
 
-### 5. Kuyruk Yönetimi
-- `source/internal/queue/queue.go`
-  - Öncelikli kuyruk implementasyonu
-  - Kanal bazlı işleyici döngüleri
-  - Bildirim işleme ve gönderme mantığı
-  - Kuyruk derinliği ölçümü
+* `source/config/config.go`
 
-### 6. Sağlayıcı Entegrasyonu
-- `source/internal/provider/provider.go`
-  - Webhook.site gibi dış sağlayıcıya POST isteği gönderme
-  - 200 veya 202 yanıtlarını kabul etme
-  - JSON yanıtı olmadığında UUID üretme
+  * Environment variables: `SERVER_ADDRESS`, `DATABASE_URL`, `WEBHOOK_URL`
+  * Mandatory webhook URL validation
 
-### 7. Metrik ve Gözlemlenebilirlik
-- `source/internal/metrics/metrics.go`
-  - Sıra derinliği
-  - Başarı ve başarısızlık sayıları
-  - Son güncelleme zamanı
-  - JSON olarak metric çıktısı üretme
+### 3. Data Model
 
-### 8. API Yönlendirmesi
-- `source/internal/api/router.go`
-  - Bildirim oluşturma: `POST /notifications`
-  - Durum sorgulama: `GET /notifications/{id}`
-  - Listeleme filtrasyon: `GET /notifications`
-  - İptal etme: `DELETE /notifications/{id}`
-  - Sağlık kontrolü: `GET /health`
-  - Metric: `GET /metrics`
+* `source/internal/model/notification.go`
 
-## Kullanım
+  * Notification status and priority constants
+  * Notification structure (`Notification`)
+  * Channel and content validations
 
-1. `source` dizinine gidin.
-2. Ortam değişkenlerini ayarlayın:
+### 4. Storage Layer
+
+* `source/internal/storage/postgres.go`
+
+  * PostgreSQL connection handling
+  * Schema migrations
+  * Transaction-based batch notification creation, updates, queries, and cancellations
+  * Filtering and pagination support
+
+### 5. Queue Management
+
+* `source/internal/queue/queue.go`
+
+  * Priority queue implementation
+  * Channel-based worker loops
+  * Notification processing and delivery logic
+  * Queue depth monitoring
+
+### 6. Provider Integration
+
+* `source/internal/provider/provider.go`
+
+  * Sends POST requests to external providers such as webhook.site
+  * Accepts both `200 OK` and `202 Accepted` responses
+  * Generates UUIDs when the provider does not return a JSON response
+
+### 7. Metrics and Observability
+
+* `source/internal/metrics/metrics.go`
+
+  * Queue depth metrics
+  * Success and failure counters
+  * Last update timestamps
+  * JSON-based metrics output
+
+### 8. API Routing
+
+* `source/internal/api/router.go`
+
+  * Create notification: `POST /notifications`
+  * Retrieve notification status: `GET /notifications/{id}`
+  * List notifications with filtering: `GET /notifications`
+  * Cancel notification: `DELETE /notifications/{id}`
+  * Health check: `GET /health`
+  * Metrics endpoint: `GET /metrics`
+
+## Usage
+
+1. Navigate to the `source` directory.
+2. Set the required environment variables:
+
 ```bash
 export WEBHOOK_URL="https://webhook.site/fa8d1250-1966-4b1a-91f5-4c2847138075"
 export SERVER_ADDRESS=":8080"
 export DATABASE_URL="postgres://notification:notification@localhost:5432/notifications?sslmode=disable"
 ```
-3. Veritabanı klasörünü oluşturun:
+
+3. Create the database directory:
+
 ```bash
 mkdir -p source/data
 ```
-4. Sunucuyu çalıştırın:
+
+4. Build and run the server:
+
 ```bash
 go build -o notification-server ./cmd/notification-server
 ./notification-server
 ```
 
-## Özellikler
+## Features
 
-- Toplu bildirim oluşturma (maksimum 1000)
-- Filtreleme ve sayfalama
-- Kanala göre öncelik sıralaması
-- PostgreSQL primary key ile korunan idempotentlik desteği
-- Planlı bildirim gönderimi (`scheduled_at`)
-- Şablon sistemi ve değişken yerleştirme
-- Gerçek zamanlı metrikler
-- Sağlık kontrolü
-- Dış webhook entegrasyonu
+* Bulk notification creation (up to 1000 notifications per request)
+* Filtering and pagination support
+* Channel-based priority processing
+* Idempotency support protected by PostgreSQL primary keys
+* Scheduled notification delivery (`scheduled_at`)
+* Template system with variable interpolation
+* Real-time metrics
+* Health check endpoint
+* External webhook integration
 
-## Geliştirme Notları
+## Development Notes
 
-- `docker-compose.yml` ve `Dockerfile` mevcut
-- `README.md` ve `IMPLEMENTATION.md` proje dokümantasyonu sağlar
-- `test.sh` temel uçtan uca testi kolaylaştırır
-- Veri saklama PostgreSQL üzerinden yapılır; yüksek trafik ve eşzamanlı yazma için SQLite'a göre daha uygundur
-- Sistemin tek instans olduğu; dağıtık kuyruğa ihtiyaç varsa Redis veya RabbitMQ eklenebilir
-- Loglar JSON structured formatta üretilir ve correlation ID alanı taşır
+* `docker-compose.yml` and `Dockerfile` are included.
+* `README.md` and `IMPLEMENTATION.md` provide project documentation.
+* `test.sh` simplifies basic end-to-end testing.
+* PostgreSQL is used for persistent storage and is better suited than SQLite for high traffic and concurrent writes.
+* The system is designed as a single-instance deployment; if distributed queueing is required, Redis or RabbitMQ can be integrated.
+* Logs are generated in JSON structured format and include a correlation ID field.
 
-## Dikkat Edilmesi Gerekenler
+## Important Considerations
 
-- webhook.site varsayılan yanıtları 200 dönebilir, bu nedenle provider tarafında hem 200 hem 202 kabul ediliyor.
-- `idempotency_key` alanı boşsa `NULL` olarak kaydediliyor; dolu olduğunda `idempotency_keys` tablosu duplicate batch isteklerini atomik olarak engelliyor.
-- Posta gönderimleri dış sağlayıcıya gerçekten iletilmiyor; webhook.site ile simülasyon sağlanıyor.
+* webhook.site may return `200 OK` responses by default, so the provider accepts both `200 OK` and `202 Accepted` responses.
+* If the `idempotency_key` field is empty, it is stored as `NULL`. When provided, the `idempotency_keys` table atomically prevents duplicate batch requests.
+* Email deliveries are not actually sent to external recipients; delivery is simulated using webhook.site.
 
-## Geliştirme Adımları
+## Future Improvements
 
-- Dead-letter queue tablosu eklenebilir
-- Kuyruk kalıcılığı için Redis/RabbitMQ kullanılabilir
-- API kimlik doğrulaması eklenebilir
-- Prometheus/Grafana entegrasyonu ile monitoring genişletilebilir
-- WebSocket durum güncellemeleri ve distributed tracing eklenebilir
+* Add a dead-letter queue table
+* Use Redis or RabbitMQ for persistent queue management
+* Add API authentication and authorization
+* Extend monitoring with Prometheus and Grafana integration
+* Add WebSocket-based status updates and distributed tracing
