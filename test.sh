@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Quick test script for the notification system
 
@@ -8,14 +9,24 @@ echo ""
 
 BASE_URL="http://localhost:8080"
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required to run this script"
+  exit 1
+fi
+
+if ! curl -fsS "$BASE_URL/health" >/dev/null; then
+  echo "notification server is not reachable at $BASE_URL"
+  exit 1
+fi
+
 # Test 1: Health check
 echo "1️⃣  Health Check"
-curl -s $BASE_URL/health | jq .
+curl -fsS "$BASE_URL/health" | jq .
 echo ""
 
 # Test 2: Create notifications
 echo "2️⃣  Creating Batch Notifications"
-RESPONSE=$(curl -s -X POST $BASE_URL/notifications \
+RESPONSE=$(curl -fsS -X POST "$BASE_URL/notifications" \
   -H "Content-Type: application/json" \
   -d '{
     "notifications": [
@@ -40,8 +51,8 @@ RESPONSE=$(curl -s -X POST $BASE_URL/notifications \
     ]
   }')
 
-BATCH_ID=$(echo $RESPONSE | jq -r '.batch_id')
-NOTIF_ID=$(echo $RESPONSE | jq -r '.notifications[0].id')
+BATCH_ID=$(echo "$RESPONSE" | jq -r '.batch_id')
+NOTIF_ID=$(echo "$RESPONSE" | jq -r '.notifications[0].id')
 
 echo "Created Batch ID: $BATCH_ID"
 echo "First Notification ID: $NOTIF_ID"
@@ -52,17 +63,17 @@ echo "3️⃣  Waiting for processing..."
 sleep 3
 
 echo "📊 System Metrics"
-curl -s $BASE_URL/metrics | jq .
+curl -fsS "$BASE_URL/metrics" | jq .
 echo ""
 
 # Test 4: Check notification status
 echo "4️⃣  Notification Status"
-curl -s $BASE_URL/notifications/$NOTIF_ID | jq .
+curl -fsS "$BASE_URL/notifications/$NOTIF_ID" | jq .
 echo ""
 
 # Test 5: List notifications
 echo "5️⃣  List Sent Notifications"
-curl -s "$BASE_URL/notifications?status=sent&size=1" | jq '.notifications[0]'
+curl -fsS "$BASE_URL/notifications?status=sent&size=1" | jq '.notifications[0]'
 echo ""
 
 echo "✅ Test completed!"

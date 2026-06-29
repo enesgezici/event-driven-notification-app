@@ -14,8 +14,11 @@
 2. `GET /notifications/{id}` - Retrieve specific notification
 3. `GET /notifications` - List with filtering (status, channel, batch_id, recipient) and pagination
 4. `DELETE /notifications/{id}` - Cancel pending notifications
-5. `GET /health` - System health check
-6. `GET /metrics` - Real-time metrics (queue depth, success/failure counts)
+5. `GET /batches/{batch_id}/notifications` - Retrieve notifications in a batch
+6. `POST /templates` - Create templates
+7. `GET /templates` and `GET /templates/{id}` - List and retrieve templates
+8. `GET /health` - System health check
+9. `GET /metrics` - Real-time metrics (queue depth, success/failure counts)
 
 ### Features Delivered
 
@@ -32,7 +35,7 @@
 #### Processing Engine
 - ✅ Asynchronous queue-based processing
 - ✅ Priority queue (High=1, Normal=2, Low=3)
-- ✅ Rate limiting framework (100 msg/sec per channel)
+- ✅ Per-channel worker tick of 10ms, giving an effective maximum of about 100 dispatch attempts/second per channel in a single instance
 - ✅ Content validation:
   - SMS: 160 character limit
   - Email/Push: Required fields validation
@@ -67,6 +70,7 @@
 - ✅ Environment-based configuration
 - ✅ Volume management for persistent data
 - ✅ Health check probe in docker-compose
+- ✅ CI formatting and unit test checks
 
 ### Documentation
 - ✅ README.md with complete API examples
@@ -75,9 +79,9 @@
 - ✅ Database schema documentation
 - ✅ Quick test script
 
-## 🚀 Verified Workflow
+## 🚀 Manual Workflow Example
 
-Tested end-to-end flow:
+The `test.sh` script exercises this flow against a running server:
 ```
 1. Create batch of 3 notifications (SMS, Email, Push)
    ✅ Batch ID: bb1feb48-d1f2-4d50-bc5b-f07c51b576cb
@@ -130,11 +134,11 @@ Status Update (database)
 Metrics Update
 ```
 
-## 📊 Current Performance
+## 📊 Expected Local Performance
 
 - Batch processing: 3 notifications in ~100ms
 - Success rate: 100% (with webhook.site)
-- Queue throughput: ≥100 msg/sec per channel
+- Queue throughput: about 100 dispatch attempts/second per channel in one instance
 - Memory usage: < 50MB for 10K queued notifications
 - Database: PostgreSQL (indexed and better suited for burst traffic)
 
@@ -191,8 +195,8 @@ bash ../test.sh
 
 ## ✨ Summary
 
-**Status**: Production-ready for single-instance deployment
-**Test Coverage**: End-to-end workflow verified
+**Status**: Single-instance demo/service implementation with persistent PostgreSQL storage
+**Test Coverage**: Unit tests cover model validation, API helper behavior, cancel responses, and queue priority/shutdown behavior. `test.sh` is available for manual end-to-end checks against a running server.
 **Code Quality**: Well-structured, modular architecture
 **Documentation**: Complete with examples
 

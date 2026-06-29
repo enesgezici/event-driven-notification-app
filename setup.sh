@@ -10,8 +10,10 @@ export DATABASE_URL="postgres://notification:notification@localhost:5432/notific
 cd ./source
 go mod download
 go mod tidy
+go build -o notification-server ./cmd/notification-server
 
 echo "✓ Dependencies installed"
+echo "✓ Binary built: source/notification-server"
 echo "✓ Webhook URL: $WEBHOOK_URL"
 echo "✓ Server will run on http://localhost:8080"
 echo ""

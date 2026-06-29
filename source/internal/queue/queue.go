@@ -57,6 +57,9 @@ type Manager struct {
 	queue           priorityQueue
 	lock            sync.Mutex
 	channelTickers  map[string]*time.Ticker
+	workerCtx       context.Context
+	workerCancel    context.CancelFunc
+	workerDone      sync.WaitGroup
 	stopWorkersOnce sync.Once
 }
 
@@ -82,7 +85,7 @@ func (m *Manager) Enqueue(notification *model.Notification) {
 		delay := time.Until(notification.ScheduledAt.UTC())
 		if delay > 0 {
 			m.logger.Info("scheduled notification delayed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "scheduled_at", notification.ScheduledAt.UTC(), "delay", delay.String())
-			time.AfterFunc(delay, func() {
+			m.runDelayed(delay, func() {
 				copy := *notification
 				copy.ScheduledAt = nil
 				m.Enqueue(&copy)
@@ -102,13 +105,21 @@ func (m *Manager) Enqueue(notification *model.Notification) {
 }
 
 func (m *Manager) StartWorkers(ctx context.Context) {
+	workerCtx, cancel := context.WithCancel(ctx)
+	m.lock.Lock()
+	m.workerCtx = workerCtx
+	m.workerCancel = cancel
+	m.lock.Unlock()
+
 	m.loadPendingNotifications()
 	for _, ch := range []string{"sms", "email", "push"} {
 		ticker := m.channelTickers[ch]
+		m.workerDone.Add(1)
 		go func(channel string, ticker *time.Ticker) {
+			defer m.workerDone.Done()
 			for {
 				select {
-				case <-ctx.Done():
+				case <-workerCtx.Done():
 					ticker.Stop()
 					return
 				case <-ticker.C:
@@ -117,6 +128,18 @@ func (m *Manager) StartWorkers(ctx context.Context) {
 			}
 		}(ch, ticker)
 	}
+}
+
+func (m *Manager) StopWorkers() {
+	m.stopWorkersOnce.Do(func() {
+		m.lock.Lock()
+		cancel := m.workerCancel
+		m.lock.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		m.workerDone.Wait()
+	})
 }
 
 func (m *Manager) loadPendingNotifications() {
@@ -139,14 +162,7 @@ func (m *Manager) processNext(channel string) {
 		return
 	}
 
-	var item *queueItem
-	for i, current := range m.queue {
-		if current.notification.Channel == channel {
-			item = current
-			heap.Remove(&m.queue, i)
-			break
-		}
-	}
+	item := m.popNextLocked(channel)
 	m.metrics.SetQueueDepth(len(m.queue))
 	m.lock.Unlock()
 
@@ -188,7 +204,7 @@ func (m *Manager) processNext(channel string) {
 			delay := retryDelay(notification.RetryCount)
 			m.metrics.IncrementRetry()
 			m.logger.Warn("notification delivery retry scheduled", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "channel", notification.Channel, "retry_count", notification.RetryCount, "retry_in", delay.String(), "error", err)
-			time.AfterFunc(delay, func() {
+			m.runDelayed(delay, func() {
 				m.Enqueue(notification)
 			})
 			return
@@ -208,6 +224,48 @@ func (m *Manager) processNext(channel string) {
 	if err := m.db.UpdateNotification(notification); err != nil {
 		m.logger.Error("update notification failed", "correlation_id", notification.BatchID, "notification_id", notification.ID, "batch_id", notification.BatchID, "error", err)
 	}
+}
+
+func (m *Manager) popNextLocked(channel string) *queueItem {
+	bestIndex := -1
+	for i, current := range m.queue {
+		if current.notification.Channel != channel {
+			continue
+		}
+		if bestIndex == -1 || queueItemBefore(current, m.queue[bestIndex]) {
+			bestIndex = i
+		}
+	}
+	if bestIndex == -1 {
+		return nil
+	}
+	return heap.Remove(&m.queue, bestIndex).(*queueItem)
+}
+
+func queueItemBefore(a, b *queueItem) bool {
+	if a.priority == b.priority {
+		return a.enqueuedAt.Before(b.enqueuedAt)
+	}
+	return a.priority < b.priority
+}
+
+func (m *Manager) runDelayed(delay time.Duration, fn func()) {
+	m.lock.Lock()
+	ctx := m.workerCtx
+	m.lock.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	timer := time.NewTimer(delay)
+	go func() {
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+			fn()
+		}
+	}()
 }
 
 func retryDelay(retryCount int) time.Duration {

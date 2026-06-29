@@ -13,7 +13,7 @@ type Storage interface {
 	GetPendingNotifications() ([]*model.Notification, error)
 	GetPendingNotificationsByBatch(batchID string) ([]*model.Notification, error)
 	GetNotificationsByIdempotencyKey(key string) ([]*model.Notification, error)
-	CancelNotification(id string) error
+	CancelNotification(id string) (bool, error)
 	SetNotificationQueued(id string) error
 	SaveTemplate(t *model.Template) error
 	GetTemplateByID(id string) (*model.Template, error)

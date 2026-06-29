@@ -10,7 +10,7 @@ This project provides a scalable notification system capable of sending notifica
 
 * `source/cmd/notification-server/main.go`
 
-  * Server startup and graceful shutdown
+  * Server startup and graceful shutdown for HTTP requests and worker loops
   * Configuration loading
   * Router initialization
 
@@ -86,13 +86,7 @@ export SERVER_ADDRESS=":8080"
 export DATABASE_URL="postgres://notification:notification@localhost:5432/notifications?sslmode=disable"
 ```
 
-3. Create the database directory:
-
-```bash
-mkdir -p source/data
-```
-
-4. Build and run the server:
+3. Build and run the server:
 
 ```bash
 go build -o notification-server ./cmd/notification-server
@@ -115,10 +109,10 @@ go build -o notification-server ./cmd/notification-server
 
 * `docker-compose.yml` and `Dockerfile` are included.
 * `README.md` and `IMPLEMENTATION.md` provide project documentation.
-* `test.sh` simplifies basic end-to-end testing.
+* `test.sh` simplifies basic end-to-end testing against a running server.
 * PostgreSQL is used for persistent storage and is better suited than SQLite for high traffic and concurrent writes.
 * The system is designed as a single-instance deployment; if distributed queueing is required, Redis or RabbitMQ can be integrated.
-* Logs are generated in JSON structured format and include a correlation ID field.
+* Logs are generated in JSON structured format and include a correlation ID field where request context is available.
 
 ## Important Considerations
 

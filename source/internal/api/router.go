@@ -110,19 +110,19 @@ func (h *apiHandler) createNotifications(w http.ResponseWriter, r *http.Request)
 		}
 
 		notif := &model.Notification{
-			ID:         uuid.NewString(),
-			BatchID:    batchID,
-			Recipient:  item.Recipient,
-			Channel:    channel,
-			Content:    content,
-			Priority:   model.ParsePriority(strings.ToLower(item.Priority)),
-			Status:     model.StatusPending,
-			RetryCount: 0,
-			TemplateID: item.TemplateID,
+			ID:           uuid.NewString(),
+			BatchID:      batchID,
+			Recipient:    item.Recipient,
+			Channel:      channel,
+			Content:      content,
+			Priority:     model.ParsePriority(strings.ToLower(item.Priority)),
+			Status:       model.StatusPending,
+			RetryCount:   0,
+			TemplateID:   item.TemplateID,
 			TemplateData: item.TemplateData,
-			ScheduledAt: scheduledAt,
-			CreatedAt:  time.Now().UTC(),
-			UpdatedAt:  time.Now().UTC(),
+			ScheduledAt:  scheduledAt,
+			CreatedAt:    time.Now().UTC(),
+			UpdatedAt:    time.Now().UTC(),
 		}
 		if idempotencyKey != "" {
 			notif.IdempotencyKey = idempotencyKey
@@ -198,9 +198,14 @@ func (h *apiHandler) listNotifications(w http.ResponseWriter, r *http.Request) {
 
 func (h *apiHandler) cancelNotification(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := h.db.CancelNotification(id); err != nil {
+	cancelled, err := h.db.CancelNotification(id)
+	if err != nil {
 		h.logger.Error("cancel notification failed", "correlation_id", requestCorrelationID(r), "notification_id", id, "error", err)
 		h.respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not cancel notification"})
+		return
+	}
+	if !cancelled {
+		h.respondJSON(w, http.StatusConflict, map[string]string{"error": "notification not found or cannot be cancelled"})
 		return
 	}
 	h.respondJSON(w, http.StatusOK, map[string]string{"result": "cancelled"})

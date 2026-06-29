@@ -41,7 +41,9 @@ func main() {
 	providerClient := provider.NewWebhookProvider(cfg.WebhookURL, logger)
 	metricsCollector := metrics.NewCollector()
 	queueManager := queue.NewManager(db, providerClient, metricsCollector, logger)
-	queueManager.StartWorkers(context.Background())
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
+	queueManager.StartWorkers(workerCtx)
 
 	router := api.NewRouter(db, queueManager, metricsCollector, logger)
 
@@ -68,4 +70,6 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Error("server shutdown failed", "error", err)
 	}
+	stopWorkers()
+	queueManager.StopWorkers()
 }

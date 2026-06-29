@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yourusername/event-driven-notification-app/internal/model"
 	_ "github.com/lib/pq"
+	"github.com/yourusername/event-driven-notification-app/internal/model"
 )
 
 type PostgresStorage struct {
@@ -294,8 +294,8 @@ func (s *PostgresStorage) getNotificationsByIdempotencyKeyTx(tx *sql.Tx, key str
 	return result, rows.Err()
 }
 
-func (s *PostgresStorage) CancelNotification(id string) error {
-	_, err := s.db.Exec(
+func (s *PostgresStorage) CancelNotification(id string) (bool, error) {
+	result, err := s.db.Exec(
 		`UPDATE notifications SET status = $1, updated_at = $2 WHERE id = $3 AND status IN ($4, $5, $6)`,
 		model.StatusCancelled,
 		time.Now().UTC(),
@@ -304,7 +304,14 @@ func (s *PostgresStorage) CancelNotification(id string) error {
 		model.StatusQueued,
 		model.StatusFailed,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
 }
 
 func (s *PostgresStorage) SaveTemplate(t *model.Template) error {

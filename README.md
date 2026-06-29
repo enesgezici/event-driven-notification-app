@@ -5,7 +5,7 @@ Event-Driven Notification Application - Scalable SMS, Email, Push notifications 
 ## Quick Start
 
 ### Prerequisites
-- Go 1.21+ or Docker
+- Go 1.25+ or Docker
 - PostgreSQL 16+ for local runs, or Docker Compose
 - Webhook URL from [webhook.site](https://webhook.site)
 
@@ -26,6 +26,7 @@ export SERVER_ADDRESS=":8080"
 export DATABASE_URL="postgres://notification:notification@localhost:5432/notifications?sslmode=disable"
 
 go mod download
+go build -o notification-server ./cmd/notification-server
 ./notification-server
 ```
 
@@ -151,6 +152,8 @@ curl http://localhost:8080/templates
 curl -X DELETE http://localhost:8080/notifications/{notification-id}
 ```
 
+Returns `409 Conflict` when the notification does not exist or is already in a non-cancellable state.
+
 ### Health Check
 ```bash
 curl http://localhost:8080/health
@@ -196,7 +199,7 @@ Response:
 ### Processing Engine
 - ✅ Asynchronous queue-based processing
 - ✅ Priority queue (High, Normal, Low)
-- ✅ Rate limiting (100 messages/second per channel)
+- ✅ Per-channel dispatch pacing (about 100 attempts/second per channel in one instance)
 - ✅ Content validation (SMS: 160 char limit)
 - ✅ Structured channel support (SMS, Email, Push)
 
@@ -238,8 +241,9 @@ Response:
 │   │       └── provider.go         # Webhook integration
 │   ├── config/
 │   │   └── config.go               # Configuration
-│   ├── go.mod
-│   └── notification-server         # Compiled binary
+│   ├── migrations/
+│   │   └── 001_create_notifications.sql
+│   └── go.mod
 ├── docker-compose.yml
 ├── Dockerfile
 └── README.md
@@ -302,7 +306,7 @@ CREATE INDEX idx_templates_channel ON templates(channel);
 ## Performance Considerations
 
 - **Queue Processing**: Each channel processes messages concurrently with 10ms polling intervals
-- **Rate Limiting**: Maximum 100 messages/second per channel (configurable)
+- **Dispatch pacing**: Each channel worker ticks every 10ms, for about 100 dispatch attempts/second per channel in one instance
 - **Database**: PostgreSQL with pooled connections and indexed status/channel/date queries
 - **Consistency**: Batch inserts are transactional, and idempotency keys are protected by a PostgreSQL primary key
 - **Memory**: Priority heap for efficient notification processing
@@ -310,14 +314,17 @@ CREATE INDEX idx_templates_channel ON templates(channel);
 ## Testing
 
 ```bash
-# Run all tests
+# Build
 cd source
+go build -o notification-server ./cmd/notification-server
+
+# Run all tests
 go test ./...
 
 # Run specific package tests
 go test ./internal/model
-go test ./internal/storage
 go test ./internal/queue
+go test ./internal/api
 
 # Run with verbose output
 go test -v ./...

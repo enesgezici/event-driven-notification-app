@@ -94,6 +94,8 @@ paths:
       responses:
         '200':
           description: Cancelled
+        '409':
+          description: Notification not found or not cancellable
   /templates:
     post:
       summary: Create a notification template

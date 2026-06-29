@@ -7,17 +7,17 @@ import (
 )
 
 type Collector struct {
-	lock              sync.Mutex
-	QueueDepth        int       `json:"queue_depth"`
-	SuccessCount      int       `json:"success_count"`
-	FailureCount      int       `json:"failure_count"`
-	RetryCount        int       `json:"retry_count"`
-	AverageLatencyMs  float64   `json:"average_latency_ms"`
-	SuccessRate       float64   `json:"success_rate"`
-	FailureRate       float64   `json:"failure_rate"`
-	TotalDeliveries   int       `json:"total_deliveries"`
+	lock               sync.Mutex
+	QueueDepth         int     `json:"queue_depth"`
+	SuccessCount       int     `json:"success_count"`
+	FailureCount       int     `json:"failure_count"`
+	RetryCount         int     `json:"retry_count"`
+	AverageLatencyMs   float64 `json:"average_latency_ms"`
+	SuccessRate        float64 `json:"success_rate"`
+	FailureRate        float64 `json:"failure_rate"`
+	TotalDeliveries    int     `json:"total_deliveries"`
 	totalLatencyMillis int64
-	LastUpdated       time.Time `json:"last_updated"`
+	LastUpdated        time.Time `json:"last_updated"`
 }
 
 func NewCollector() *Collector {
